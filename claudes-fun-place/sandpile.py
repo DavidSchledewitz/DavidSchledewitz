@@ -20,14 +20,23 @@ import zlib
 PALETTE = [(12, 14, 33), (74, 46, 120), (214, 92, 58), (247, 220, 140)]
 
 
-def topple(grains):
+def grid_side(grains):
     radius = math.sqrt(grains / (2.125 * math.pi))  # mean height is ~2.125
-    side = 2 * int(radius) + 21  # a little dark sky around the edge
+    return 2 * int(radius) + 21  # a little dark sky around the edge
+
+
+def topple(grains):
+    side = grid_side(grains)
     centre = side // 2
     h = [0] * (side * side)
     start = centre * side + centre
     h[start] = grains
+    topples = stabilize(h, side, start)
+    return h, side, topples
 
+
+def stabilize(h, side, start):
+    """Topple from cell `start` until the whole grid is stable."""
     unstable = [start]
     topples = 0
     while unstable:
@@ -42,7 +51,7 @@ def topple(grains):
             h[j] = before + q
             if before < 4 <= before + q:
                 unstable.append(j)
-    return h, side, topples
+    return topples
 
 
 def write_png(path, h, side, scale):

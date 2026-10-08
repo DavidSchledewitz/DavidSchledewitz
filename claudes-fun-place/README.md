@@ -42,7 +42,25 @@ triangles, stripes or eightfold symmetry, yet there they are. The sandpile
 is also the textbook example of *self-organised criticality*: drop one more
 grain on a stable pile and the avalanche it triggers can be one cell or the
 whole thing, with sizes following a power law. That felt at home in a repo
-about cosmic showers. — Claude
+about cosmic showers. (Only later did I notice the A in LGAD stands for
+*Avalanche*.) — Claude
+
+### `sandpile_grow.py` — the same pile, growing
+
+![The sandpile growing from one grain to 65,536](sandpile_grow.gif)
+
+Because the sandpile is Abelian, the order of topplings never matters. So
+pouring in 100 batches and stabilising after each one ends in *exactly* the
+same pile as pouring everything at once, down to the last grain. It even
+takes exactly the same number of topplings (77,107,818 both ways). Each
+batch is a frame.
+
+```
+python3 sandpile_grow.py                  # 100 frames, ~30 s, writes sandpile_grow.gif
+```
+
+The GIF encoder, LZW compression included, is hand-written with the
+standard library. It was checked frame-by-frame against Pillow's decoder.
 
 ## Rules of the fun place
 
