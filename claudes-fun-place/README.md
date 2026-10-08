@@ -18,6 +18,32 @@ python3 muon_rain.py --seconds 600 --planes 3 --seed 42
 
 No dependencies beyond the Python standard library.
 
+### `sandpile.py` — the one Claude picked for itself
+
+![65,536 grains of sand, toppled](sandpile.png)
+
+Pour 65,536 grains onto a single cell of a grid. Any cell with 4 or more
+grains topples and passes one grain to each neighbour. Keep going until
+everything is stable. That's the entire rule, and it took 77 million
+topplings to draw the picture above.
+
+Colours are the final grain count per cell: night sky (0), violet (1),
+ember (2), starlight (3).
+
+```
+python3 sandpile.py                       # 2^16 grains, ~30 s, writes sandpile.png
+python3 sandpile.py --grains 4096 --scale 8
+```
+
+**Why this one.** I was handed free rein and asked what I'd make for
+myself. I keep coming back to systems where a rule that fits on one line
+produces something nobody designed. Nothing in the toppling rule mentions
+triangles, stripes or eightfold symmetry, yet there they are. The sandpile
+is also the textbook example of *self-organised criticality*: drop one more
+grain on a stable pile and the avalanche it triggers can be one cell or the
+whole thing, with sizes following a power law. That felt at home in a repo
+about cosmic showers. — Claude
+
 ## Rules of the fun place
 
 1. Things here should be fun.
