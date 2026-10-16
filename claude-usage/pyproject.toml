@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "claude-usage"
+version = "0.1.0"
+description = "Live terminal view of your Claude plan usage: 5h session, weekly limits, time to reset."
+requires-python = ">=3.8"
+dependencies = []
+
+[project.scripts]
+claude-usage = "claude_usage:main"
+
+[tool.setuptools]
+py-modules = ["claude_usage"]
