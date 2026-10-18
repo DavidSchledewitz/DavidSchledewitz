@@ -10,7 +10,8 @@ const SAMPLE = {
     seven_day_opus: {utilization: null, resets_at: null},
     seven_day_sonnet: {utilization: 5.0, resets_at: iso(3 * U.DAY)},
     some_future_limit: {utilization: 7.0, resets_at: null},
-    extra_usage: {is_enabled: true, utilization: 25.0},
+    iguana_necktie: {utilization: 11.0, resets_at: iso(17 * U.DAY + 16 * U.HOUR)},
+    extra_usage: {is_enabled: true, monthly_limit: 4000, used_credits: 147.0, utilization: 3.675},
 };
 
 let failed = 0, ran = 0;
@@ -24,12 +25,16 @@ function eq(name, got, want) {
 }
 
 const limits = U.parseLimits(SAMPLE);
-eq('order + filtering', limits.map(l => l.key), ['five_hour', 'seven_day', 'seven_day_sonnet', 'some_future_limit']);
-eq('unknown label', limits[3].label, 'Some future limit');
+eq('order + filtering', limits.map(l => l.key), ['five_hour', 'seven_day', 'seven_day_sonnet', 'iguana_necktie', 'some_future_limit']);
+eq('unknown label', limits[4].label, 'Some future limit');
+eq('cloud credits label', limits[3].label, 'Cloud session credits');
+eq('cloud credits no pace', U.paceNote(limits[3], NOW), null);
 eq('five hour without session kept', U.parseLimits({five_hour: {utilization: null, resets_at: null}}).length, 1);
 eq('elapsed fraction', U.elapsedFraction(limits[0], NOW).toFixed(3), '0.600');
 eq('Z timestamps', U.parseLimits({five_hour: {utilization: 1, resets_at: '2026-10-16T12:00:00Z'}})[0].resetsAt, NOW);
-eq('extra', U.parseExtra(SAMPLE), 25);
+eq('extra', U.parseExtra(SAMPLE), {pct: 3.675, used: 147, limit: 4000});
+eq('extra derived pct', U.parseExtra({extra_usage: {is_enabled: true, monthly_limit: 100000, used_credits: 0, utilization: null}}).pct, 0);
+eq('money', U.fmtMoney(147), '$1.47');
 eq('extra disabled', U.parseExtra({extra_usage: {is_enabled: false, utilization: 3}}), null);
 eq('duration h', U.fmtDuration(2 * 3600 + 13 * 60 + 5), '2h 13m');
 eq('duration h s', U.fmtDuration(2 * 3600 + 13 * 60 + 5, true), '2h 13m 05s');

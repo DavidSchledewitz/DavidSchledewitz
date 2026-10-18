@@ -20,14 +20,15 @@ SAMPLE = {
     "seven_day_opus": {"utilization": None, "resets_at": None},
     "seven_day_sonnet": {"utilization": 5.0, "resets_at": (NOW + timedelta(days=3)).isoformat()},
     "some_future_limit": {"utilization": 7.0, "resets_at": None},
-    "extra_usage": {"is_enabled": True, "utilization": 25.0},
+    "iguana_necktie": {"utilization": 11.0, "resets_at": (NOW + timedelta(days=17, hours=16)).isoformat()},
+    "extra_usage": {"is_enabled": True, "monthly_limit": 4000, "used_credits": 147.0, "utilization": 3.675},
 }
 
 
 class ParseTests(unittest.TestCase):
     def test_parse_limits_order_and_filtering(self):
         keys = [l.key for l in cu.parse_limits(SAMPLE)]
-        self.assertEqual(keys, ["five_hour", "seven_day", "seven_day_sonnet", "some_future_limit"])
+        self.assertEqual(keys, ["five_hour", "seven_day", "seven_day_sonnet", "iguana_necktie", "some_future_limit"])
 
     def test_five_hour_without_session_is_still_shown(self):
         limits = cu.parse_limits({"five_hour": {"utilization": None, "resets_at": None}})
@@ -42,8 +43,17 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(cu.parse_time("2026-10-16T12:00:00Z"), NOW)
 
     def test_extra(self):
-        self.assertEqual(cu.parse_extra(SAMPLE), 25.0)
+        self.assertEqual(cu.parse_extra(SAMPLE), cu.Extra(pct=3.675, used=147.0, limit=4000))
         self.assertIsNone(cu.parse_extra({"extra_usage": {"is_enabled": False, "utilization": 3}}))
+        # utilization can be null: derive it from the amounts
+        derived = cu.parse_extra({"extra_usage": {"is_enabled": True, "monthly_limit": 100000,
+                                                  "used_credits": 0.0, "utilization": None}})
+        self.assertEqual(derived.pct, 0.0)
+
+    def test_cloud_credits(self):
+        cloud = [l for l in cu.parse_limits(SAMPLE) if l.key == "iguana_necktie"][0]
+        self.assertEqual(cloud.label, "Cloud session credits")
+        self.assertIsNone(cu.pace_note(cloud, NOW))
 
 
 class FormatTests(unittest.TestCase):
@@ -91,7 +101,9 @@ class FormatTests(unittest.TestCase):
         self.assertNotIn("\x1b", text)
         self.assertIn("Current session (5h)", text)
         self.assertIn("resets in 2h 00m 00s", text)
-        self.assertIn("Extra usage", text)
+        self.assertIn("Usage credits (monthly)", text)
+        self.assertIn("$1.47 of $40.00 spent", text)
+        self.assertIn("expires in 17d 16h", text)
 
     def test_bar_width_and_marker(self):
         b = cu.bar(50, 0.25, 40, cu.Style(False))

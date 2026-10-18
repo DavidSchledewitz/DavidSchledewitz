@@ -417,17 +417,19 @@ class ClaudeUsageIndicator extends PanelMenu.Button {
         if (extra !== null) {
             const section = vbox({style_class: 'claude-usage-section'});
             const top = new St.BoxLayout();
-            top.add_child(this._label('Extra usage (monthly)', 'claude-usage-name', {x_expand: true}));
-            top.add_child(this._label(`${extra.toFixed(0)}%`, 'claude-usage-pct'));
+            top.add_child(this._label('Usage credits (monthly)', 'claude-usage-name', {x_expand: true}));
+            top.add_child(this._label(`${extra.pct.toFixed(0)}%`, 'claude-usage-pct'));
             section.add_child(top);
             const area = new St.DrawingArea({style_class: 'claude-usage-bar', x_expand: true});
             area.connect('repaint', a => {
                 const cr = a.get_context();
                 const [w, h] = a.get_surface_size();
-                paintBar(cr, 1, 3, w - 2, h - 6, fgColor(a), {pct: extra});
+                paintBar(cr, 1, 3, w - 2, h - 6, fgColor(a), {pct: extra.pct});
                 cr.$dispose();
             });
             section.add_child(area);
+            if (extra.used !== null && extra.limit)
+                section.add_child(this._label(`${U.fmtMoney(extra.used)} of ${U.fmtMoney(extra.limit)} spent`, 'claude-usage-detail'));
             this._content.add_child(section);
         }
 
@@ -445,9 +447,9 @@ class ClaudeUsageIndicator extends PanelMenu.Button {
             if (left === null)
                 detail.text = limit.key === 'five_hour' ? 'No active session. It starts with your next message.' : 'No reset scheduled';
             else if (left === 0)
-                detail.text = 'Resetting now…';
+                detail.text = U.EXPIRING.includes(limit.key) ? 'Expired' : 'Resetting now…';
             else
-                detail.text = `Resets in ${U.fmtDuration(left, true)} · ${this._fmtClock(limit.resetsAt)}`;
+                detail.text = `${U.EXPIRING.includes(limit.key) ? 'Expires' : 'Resets'} in ${U.fmtDuration(left, true)} · ${this._fmtClock(limit.resetsAt)}`;
             const note = U.paceNote(limit, now);
             pace.text = note?.text ?? '';
             pace.visible = Boolean(note);

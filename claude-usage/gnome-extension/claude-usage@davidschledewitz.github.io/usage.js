@@ -11,8 +11,12 @@ export const KNOWN_LIMITS = {
     seven_day_opus: ['Week · Opus', 7 * DAY],
     seven_day_sonnet: ['Week · Sonnet', 7 * DAY],
     seven_day_oauth_apps: ['Week · OAuth apps', 7 * DAY],
+    // Internal codename; claude.ai shows it as "Cloud session credits", a
+    // one-off allowance that expires rather than a rolling window.
+    iguana_necktie: ['Cloud session credits', null],
 };
 const ALWAYS_SHOWN = ['five_hour', 'seven_day'];
+export const EXPIRING = ['iguana_necktie'];
 
 function guess(key) {
     if (key in KNOWN_LIMITS)
@@ -55,11 +59,24 @@ export function parseLimits(data) {
     return limits.sort((a, b) => rank(a) - rank(b));
 }
 
+/**
+ * Pay-as-you-go usage beyond the plan ("Usage credits" on claude.ai).
+ * Returns {pct, used, limit} with amounts in cents, or null.
+ */
 export function parseExtra(data) {
     const extra = data?.extra_usage;
-    if (extra && extra.is_enabled && extra.utilization !== null && extra.utilization !== undefined)
-        return Number(extra.utilization);
-    return null;
+    if (!extra || !extra.is_enabled)
+        return null;
+    const num = v => (typeof v === 'number' ? v : null);
+    const used = num(extra.used_credits), limit = num(extra.monthly_limit);
+    let pct = num(extra.utilization);
+    if (pct === null && used !== null && limit)
+        pct = 100 * used / limit;
+    return pct === null ? null : {pct, used, limit};
+}
+
+export function fmtMoney(cents) {
+    return `$${(cents / 100).toFixed(2)}`;
 }
 
 export function secondsLeft(limit, now) {

@@ -43,8 +43,12 @@ KNOWN_LIMITS = {
     "seven_day_opus": ("Week · Opus", "opus", 7 * DAY),
     "seven_day_sonnet": ("Week · Sonnet", "sonnet", 7 * DAY),
     "seven_day_oauth_apps": ("Week · OAuth apps", "apps", 7 * DAY),
+    # Internal codename; claude.ai shows it as "Cloud session credits", a
+    # one-off allowance that expires rather than a rolling window.
+    "iguana_necktie": ("Cloud session credits", "cloud", None),
 }
 ALWAYS_SHOWN = ("five_hour", "seven_day")
+EXPIRING = ("iguana_necktie",)
 
 
 # --------------------------------------------------------------------------
@@ -216,11 +220,31 @@ def parse_limits(data: dict) -> list[Limit]:
     return limits
 
 
-def parse_extra(data: dict) -> float | None:
+@dataclass
+class Extra:
+    """Pay-as-you-go usage beyond the plan ("Usage credits" on claude.ai).
+    Amounts are in cents."""
+    pct: float
+    used: float | None
+    limit: float | None
+
+
+def parse_extra(data: dict) -> Extra | None:
     extra = data.get("extra_usage")
-    if isinstance(extra, dict) and extra.get("is_enabled") and extra.get("utilization") is not None:
-        return float(extra["utilization"])
-    return None
+    if not isinstance(extra, dict) or not extra.get("is_enabled"):
+        return None
+    num = lambda v: float(v) if isinstance(v, (int, float)) else None
+    used, limit = num(extra.get("used_credits")), num(extra.get("monthly_limit"))
+    pct = num(extra.get("utilization"))
+    if pct is None and used is not None and limit:
+        pct = 100 * used / limit
+    if pct is None:
+        return None
+    return Extra(pct=pct, used=used, limit=limit)
+
+
+def fmt_money(cents: float) -> str:
+    return f"${cents / 100:,.2f}"
 
 
 # --------------------------------------------------------------------------
@@ -374,9 +398,10 @@ def render(state: "State", now: datetime, width: int, st: Style, live: bool) -> 
             else:
                 detail = "no reset scheduled"
         elif left == 0:
-            detail = "resetting now…"
+            detail = "expired" if limit.key in EXPIRING else "resetting now…"
         else:
-            detail = (f"resets in {st(fmt_duration(left, with_seconds=live), '1')}"
+            verb = "expires" if limit.key in EXPIRING else "resets"
+            detail = (f"{verb} in {st(fmt_duration(left, with_seconds=live), '1')}"
                       f" · at {fmt_clock(limit.resets_at, now)}")
         lines.append(" " + st(detail, "37"))
         note = pace_note(limit, now)
@@ -387,8 +412,12 @@ def render(state: "State", now: datetime, width: int, st: Style, live: bool) -> 
 
     extra = parse_extra(state.data)
     if extra is not None:
-        lines.append(" " + st("Extra usage (monthly)", "1") + f"  {extra:.0f}%")
-        lines.append(" " + bar(extra, None, inner, st))
+        label, pct_txt = "Usage credits (monthly)", f"{extra.pct:3.0f}%"
+        gap = max(1, inner - len(label) - len(pct_txt))
+        lines.append(" " + st(label, "1") + " " * gap + st(pct_txt, "1", st.for_pct(extra.pct)))
+        lines.append(" " + bar(extra.pct, None, inner, st))
+        if extra.used is not None and extra.limit:
+            lines.append(" " + st(f"{fmt_money(extra.used)} of {fmt_money(extra.limit)} spent", "37"))
         lines.append("")
 
     footer = []
