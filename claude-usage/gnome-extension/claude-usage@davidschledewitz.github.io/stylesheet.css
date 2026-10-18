@@ -1,0 +1,62 @@
+.claude-usage-icon {
+  width: 16px;
+  height: 16px;
+  margin-right: 6px;
+}
+
+.claude-usage-panel-label {
+  font-feature-settings: "tnum";
+}
+
+.claude-usage-popup {
+  width: 320px;
+  spacing: 14px;
+  padding: 8px 14px 4px;
+}
+
+.claude-usage-header {
+  margin-bottom: 2px;
+}
+
+.claude-usage-title {
+  font-weight: bold;
+  font-size: 1.1em;
+}
+
+.claude-usage-section {
+  spacing: 3px;
+}
+
+.claude-usage-name {
+  font-weight: bold;
+}
+
+.claude-usage-pct {
+  font-weight: bold;
+  font-feature-settings: "tnum";
+}
+
+.claude-usage-bar {
+  height: 14px;
+}
+
+.claude-usage-scale {
+  font-size: 0.8em;
+}
+
+.claude-usage-detail {
+  font-feature-settings: "tnum";
+}
+
+.claude-usage-dim {
+  font-size: 0.9em;
+}
+
+.claude-usage-over {
+  color: #e5a50a;
+}
+
+.claude-usage-error {
+  color: #ff7b63;
+  font-size: 0.9em;
+}

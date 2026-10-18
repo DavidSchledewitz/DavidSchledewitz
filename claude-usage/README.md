@@ -2,7 +2,11 @@
 
 A small terminal dashboard for your Claude (Pro/Max) plan limits: the current
 **5-hour session**, the **weekly** limits, and a live countdown until each one
-resets. It's one Python file with no dependencies.
+resets. It comes in two forms:
+
+- **A terminal app**: one Python file with no dependencies.
+- **A GNOME top-bar extension**: an indicator next to the clock and wifi, with
+  a popup. See [GNOME top bar](#gnome-top-bar-ubuntu).
 
 ```
  Claude usage · Max plan
@@ -69,7 +73,38 @@ set -g status-right '#(claude-usage --line)'
 { "statusLine": { "type": "command", "command": "claude-usage --line" } }
 ```
 
-## How it works
+## GNOME top bar (Ubuntu)
+
+<img src="gnome-extension/screenshot.png" width="375" alt="Top-bar indicator with the usage popup open">
+
+The top-bar icon shows two mini bars: the 5h session on top and the week
+below. Next to them are both percentages. Click it for the popup: every
+limit, a live countdown, day ticks on the weekly bars and the pace note.
+
+Install it for your user:
+
+```bash
+./gnome-extension/install.sh
+```
+
+Then **log out and back in once**. GNOME on Wayland only picks up new
+extensions at login, and the same goes after updating the code.
+`./gnome-extension/install.sh --uninstall` removes it.
+
+Notes:
+
+- It's tested on GNOME 46 (Ubuntu 24.04). It declares support up to GNOME 50
+  (Ubuntu 26.04), but those versions are untested. If it doesn't show up
+  after an upgrade, run `journalctl -o cat -b /usr/bin/gnome-shell | grep -i claude`
+  to see why.
+- It needs nothing beyond GNOME itself: no Python, no extra packages. It
+  reads the same login and calls the same endpoint as the terminal app, and
+  it shares the cache in `~/.cache/claude-usage/`. The terminal app and the
+  extension can run side by side without doubling the requests.
+- It polls once a minute. While you're locked, GNOME turns extensions off,
+  so it doesn't poll then.
+
+
 
 Claude Code stores your claude.ai login in one of these places:
 
@@ -99,7 +134,6 @@ Things to know:
 ## Tests
 
 ```bash
-python3 -m unittest -v test_claude_usage
+python3 -m unittest -v test_claude_usage     # terminal app, includes a fake-server end-to-end run
+gjs -m gnome-extension/tests/test_usage.js   # extension's parsing/pace logic
 ```
-
-The tests include an end-to-end run against a local fake usage endpoint.
