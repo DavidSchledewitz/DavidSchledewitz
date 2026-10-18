@@ -84,12 +84,12 @@ limit, a live countdown, day ticks on the weekly bars and the pace note.
 Install it for your user:
 
 ```bash
-./gnome-extension/install.sh
+./gnome-extension/install_claude_bar.sh
 ```
 
 Then **log out and back in once**. GNOME on Wayland only picks up new
 extensions at login, and the same goes after updating the code.
-`./gnome-extension/install.sh --uninstall` removes it.
+`./gnome-extension/install_claude_bar.sh --uninstall` removes it.
 
 Notes:
 
@@ -104,7 +104,7 @@ Notes:
 - It polls once a minute. While you're locked, GNOME turns extensions off,
   so it doesn't poll then.
 
-
+## How it works
 
 Claude Code stores your claude.ai login in one of these places:
 
