@@ -9,21 +9,29 @@ resets. It's one Python file with no dependencies.
 
  Current session (5h)                                               62%
  ███████████████████████████████████████████░┃░░░░░░░░░░░░░░░░░░░░░░░░░
- resets in 1h 47m 08s · at 13:13
- at this pace: ~96% at reset
+ resets in 1h 47m 08s · at 14:29
+ 2% under pace · ~96% at reset
 
- Week · all models                                                  34%
- ████████████████████████░░░┃░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
- resets in 4d 5h · at Tue 20 Oct 17:26
- at this pace: ~87% at reset
+ Week · all models                                                  51%
+ ██████████▓█████████▓██████┃██▓█████░░░░│░░░░░░░░░│░░░░░░░░░│░░░░░░░░░
+ Thu       Fri       Sat       Sun       Mon       Tue       Wed
+ resets in 4d 5h · at Thu 22 Oct 18:42
+ day 3 of 7 · 12% over pace · limit in ~2d 15h at this rate
 
  updated 2s ago · next in 57s · [r] refresh  [q] quit
 ```
 
-The bar is colored green, yellow or red (50% / 80%). The `┃` marker shows how
-much of the window has passed. If the fill is left of the marker, you're
-under pace. The "at this pace" line extrapolates your current burn rate
-linearly.
+How to read it:
+
+- The bar turns green, yellow or red at 50% and 80%.
+- `┃` marks **now**: how much of the window has passed. If the fill stops
+  left of it, you're under pace.
+- On weekly bars, a tick marks each day. Each segment is one day's even share
+  (about 14%) of the weekly budget. The weekday under each tick is when that
+  day starts. Days begin at your reset time, not at midnight.
+- "x% over/under pace" compares your usage with an even burn across the
+  window. The last part extrapolates your current rate linearly. It's shown
+  in yellow when you're over pace.
 
 ## Install
 

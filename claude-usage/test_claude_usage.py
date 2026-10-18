@@ -56,12 +56,31 @@ class FormatTests(unittest.TestCase):
     def test_pace_under(self):
         # 40% used after 3h of 5h -> ~67% at reset
         note = cu.pace_note(cu.parse_limits(SAMPLE)[0], NOW)
-        self.assertEqual(note, "at this pace: ~67% at reset")
+        self.assertEqual(note, ("20% under pace · ~67% at reset", False))
 
     def test_pace_over(self):
         data = {"five_hour": {"utilization": 90.0, "resets_at": (NOW + timedelta(hours=2)).isoformat()}}
         note = cu.pace_note(cu.parse_limits(data)[0], NOW)
-        self.assertEqual(note, "at this pace: limit in ~20m")
+        self.assertEqual(note, ("30% over pace · limit in ~20m at this rate", True))
+
+    def test_weekly_pace_has_day_count(self):
+        # 12% used, 3d 4h left of 7d -> day 4, 55% of the week gone
+        week = cu.parse_limits(SAMPLE)[1]
+        self.assertEqual(cu.pace_note(week, NOW), ("day 4 of 7 · 43% under pace · ~22% at reset", False))
+
+    def test_weekly_bar_has_day_ticks(self):
+        b = cu.bar(50, None, 70, cu.Style(False), segments=7)
+        self.assertEqual([i for i, c in enumerate(b) if c in "│▓"], [10, 20, 30, 40, 50, 60])
+        self.assertEqual(b[10], "▓")  # inside the filled part
+        self.assertEqual(b[40], "│")  # in the empty part
+
+    def test_day_scale_labels(self):
+        week = cu.parse_limits(SAMPLE)[1]
+        scale = cu.day_scale(week, 70)
+        self.assertEqual(len(scale), 70)
+        self.assertEqual(len(scale.split()), 7)
+        self.assertIsNone(cu.day_scale(week, 20))  # too narrow
+        self.assertIsNone(cu.day_scale(cu.parse_limits(SAMPLE)[0], 70))  # 5h has no days
 
     def test_line(self):
         self.assertEqual(cu.render_line(SAMPLE, NOW), "5h 40% (2h00m) · wk 12% (3d4h)")

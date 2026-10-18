@@ -25,7 +25,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 __version__ = "0.1.0"
@@ -266,37 +266,83 @@ class Style:
         return "31" if pct >= 80 else "33" if pct >= 50 else "32"
 
 
-def bar(pct: float | None, elapsed: float | None, width: int, st: Style) -> str:
+def bar(pct: float | None, elapsed: float | None, width: int, st: Style, segments: int = 0) -> str:
     """Usage bar. The ┃ marker shows how far through the window you are:
-    fill to its left of it means you are on or under pace."""
+    fill to the left of it means you are on or under pace. With `segments`,
+    a tick is drawn at each boundary (e.g. one per day of a weekly window),
+    so each segment is one even share of the budget."""
     filled = 0 if pct is None else round(min(100.0, max(0.0, pct)) / 100 * width)
     marker = None if elapsed is None else min(width - 1, int(elapsed * width))
+    ticks = {round(k * width / segments) for k in range(1, segments)} if segments > 1 else set()
+    fg = st.for_pct(pct)
+    bg = str(int(fg) + 10)
     out = []
     for i in range(width):
         if i == marker:
             out.append(st("┃", "1", "97" if i < filled else "37"))
+        elif i in ticks:
+            if i < filled:
+                out.append(st("│", "30", bg) if st.enabled else "▓")
+            else:
+                out.append(st("│", "90"))
         elif i < filled:
-            out.append(st("█", st.for_pct(pct)))
+            out.append(st("█", fg))
         else:
             out.append(st("░", "90"))
     return "".join(out)
 
 
-def pace_note(limit: Limit, now: datetime) -> str | None:
-    """Linear projection: when do you hit 100% at the current burn rate?"""
+def window_days(limit: Limit) -> int:
+    """Number of days in a multi-day window (7 for weekly), else 0."""
+    return limit.window // DAY if limit.window and limit.window >= 2 * DAY else 0
+
+
+def day_scale(limit: Limit, width: int) -> str | None:
+    """Weekday labels under a weekly bar, one at the start of each day-segment.
+    The window starts exactly one week before the reset, so each tick falls on
+    the reset's time of day."""
+    days = window_days(limit)
+    if not days or limit.resets_at is None or width / days < 5:
+        return None
+    start = limit.resets_at - timedelta(seconds=limit.window)
+    line = [" "] * width
+    for k in range(days):
+        label = (start + timedelta(days=k)).astimezone().strftime("%a")
+        pos = round(k * width / days)
+        line[pos:pos + len(label)] = label
+    return "".join(line[:width])
+
+
+def pace_note(limit: Limit, now: datetime) -> tuple[str, bool] | None:
+    """How you compare with an even burn across the window, plus a linear
+    projection. Returns (text, over_pace)."""
     left = limit.seconds_left(now)
     if limit.pct is None or left is None or not limit.window:
         return None
     if limit.pct >= 100:
-        return "limit reached"
+        return "limit reached", True
     elapsed = limit.window - left
-    if elapsed < limit.window * 0.05 or limit.pct <= 0:
-        return None  # too early to say anything useful
-    rate = limit.pct / elapsed  # percent per second
-    to_full = (100 - limit.pct) / rate
-    if to_full < left:
-        return f"at this pace: limit in ~{fmt_duration(to_full)}"
-    return f"at this pace: ~{min(100.0, limit.pct + rate * left):.0f}% at reset"
+    parts = []
+    days = window_days(limit)
+    if days:
+        parts.append(f"day {min(days, int(elapsed // DAY) + 1)} of {days}")
+    if elapsed >= limit.window * 0.05:  # earlier than this the numbers are noise
+        diff = limit.pct - 100 * elapsed / limit.window
+        if abs(diff) < 1:
+            parts.append("on pace")
+        else:
+            parts.append(f"{abs(diff):.0f}% {'over' if diff > 0 else 'under'} pace")
+        if limit.pct > 0:
+            rate = limit.pct / elapsed  # percent per second
+            to_full = (100 - limit.pct) / rate
+            if to_full < left:
+                parts.append(f"limit in ~{fmt_duration(to_full)} at this rate")
+            else:
+                parts.append(f"~{limit.pct + rate * left:.0f}% at reset")
+        over = diff >= 1
+    else:
+        over = False
+    return (" · ".join(parts), over) if parts else None
 
 
 def render(state: "State", now: datetime, width: int, st: Style, live: bool) -> list[str]:
@@ -315,7 +361,10 @@ def render(state: "State", now: datetime, width: int, st: Style, live: bool) -> 
         pct_txt = "  —" if limit.pct is None else f"{limit.pct:3.0f}%"
         gap = max(1, inner - len(limit.label) - len(pct_txt))
         lines.append(" " + st(limit.label, "1") + " " * gap + st(pct_txt, "1", st.for_pct(limit.pct)))
-        lines.append(" " + bar(limit.pct, limit.elapsed_fraction(now), inner, st))
+        lines.append(" " + bar(limit.pct, limit.elapsed_fraction(now), inner, st, window_days(limit)))
+        scale = day_scale(limit, inner)
+        if scale:
+            lines.append(" " + st(scale, "90"))
 
         left = limit.seconds_left(now)
         if left is None:
@@ -331,7 +380,8 @@ def render(state: "State", now: datetime, width: int, st: Style, live: bool) -> 
         lines.append(" " + st(detail, "37"))
         note = pace_note(limit, now)
         if note:
-            lines.append(" " + st(note, "90"))
+            text, over = note
+            lines.append(" " + st(text, "33" if over else "90"))
         lines.append("")
 
     extra = parse_extra(state.data)
