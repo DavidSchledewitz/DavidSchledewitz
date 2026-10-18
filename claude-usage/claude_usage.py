@@ -111,8 +111,9 @@ def load_credentials() -> Credentials:
             pass
 
     raise UsageError(
-        "no Claude login found. Log in with Claude Code (`claude`, then /login) "
-        "using your Pro/Max account, or set CLAUDE_CODE_OAUTH_TOKEN."
+        "no Claude Code login found. The Claude desktop app's login can't be "
+        "read by other programs, so install Claude Code and log in once "
+        "(`claude`, then /login with your Pro/Max account), or set CLAUDE_CODE_OAUTH_TOKEN."
     )
 
 

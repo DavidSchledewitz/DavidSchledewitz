@@ -128,11 +128,11 @@ class UsageSource {
         } catch (e) {
             if (e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
                 throw e;
-            throw new UsageError('No Claude login found. Log in with Claude Code (claude, then /login).');
+            throw new UsageError('No Claude Code login found. The desktop app\'s login can\'t be read; install Claude Code and log in once: run claude, then /login.');
         }
         const oauth = blob?.claudeAiOauth ?? {};
         if (!oauth.accessToken)
-            throw new UsageError('No Claude login found. Log in with Claude Code (claude, then /login).');
+            throw new UsageError('No Claude Code login found. The desktop app\'s login can\'t be read; install Claude Code and log in once: run claude, then /login.');
         return {token: oauth.accessToken, plan: oauth.subscriptionType ?? null};
     }
 
