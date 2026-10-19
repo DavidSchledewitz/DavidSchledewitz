@@ -187,6 +187,15 @@ class EndToEndTests(unittest.TestCase):
         self.assertGreater(state.next_fetch, cu.time.time() + 890)
         self.assertIn("Retrying in 15m", state.error)
 
+    def test_backoff_sequence_with_5_min_interval(self):
+        state = cu.State()
+        delays = []
+        with mock.patch.object(cu, "fetch_usage", side_effect=cu.UsageError("HTTP 429", 0)):
+            for _ in range(5):
+                state.refresh(300)
+                delays.append(round(state.next_fetch - cu.time.time()))
+        self.assertEqual(delays, [300, 600, 1200, 1800, 1800])
+
     def test_state_backoff_on_error(self):
         state = cu.State()
         with mock.patch.object(cu, "fetch_usage", side_effect=cu.UsageError("boom")):

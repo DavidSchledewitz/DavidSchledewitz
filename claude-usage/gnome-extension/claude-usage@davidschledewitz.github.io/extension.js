@@ -28,8 +28,8 @@ Gio._promisify(Soup.Session.prototype, 'send_and_read_async');
 
 const API_URL = GLib.getenv('CLAUDE_USAGE_API_URL') ?? 'https://api.anthropic.com/api/oauth/usage';
 const OAUTH_BETA = 'oauth-2025-04-20';
-const INTERVAL = 120; // seconds between polls; the endpoint rate-limits eagerly
-const MAX_BACKOFF = 15 * 60;
+const INTERVAL = 300; // seconds between polls; the endpoint rate-limits eagerly
+const MAX_BACKOFF = 30 * 60;
 
 // GNOME palette: green 3, yellow 3, red 2
 const COLORS = {

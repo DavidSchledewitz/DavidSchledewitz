@@ -502,7 +502,7 @@ class State:
             self.next_fetch = time.time() + interval
         except UsageError as exc:
             self.failures += 1
-            backoff = max(min(interval * 2 ** (self.failures - 1), 15 * 60), exc.retry_after)
+            backoff = max(min(interval * 2 ** (self.failures - 1), 30 * 60), exc.retry_after)
             self.error = str(exc)
             if exc.retry_after:
                 self.error += f" Retrying in {fmt_duration(backoff)}."
@@ -595,16 +595,16 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--once", action="store_true", help="print the dashboard once and exit")
     mode.add_argument("--line", action="store_true", help="print one compact line (for tmux/status bars)")
     mode.add_argument("--json", action="store_true", help="print the raw API response")
-    p.add_argument("-i", "--interval", type=float, default=120,
-                   help="seconds between API polls in live mode (default 120, min 15)")
-    p.add_argument("--cache-ttl", type=float, default=120,
-                   help="--line reuses data younger than this many seconds (default 120)")
+    p.add_argument("-i", "--interval", type=float, default=300,
+                   help="seconds between API polls in live mode (default 300, min 60)")
+    p.add_argument("--cache-ttl", type=float, default=300,
+                   help="--line reuses data younger than this many seconds (default 300)")
     p.add_argument("--no-color", action="store_true", help="disable colors (also: NO_COLOR env var)")
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     args = p.parse_args(argv)
 
     color = not args.no_color and "NO_COLOR" not in os.environ
-    interval = max(15.0, args.interval)
+    interval = max(60.0, args.interval)
     live = not (args.once or args.line or args.json)
 
     if live and sys.stdout.isatty():
