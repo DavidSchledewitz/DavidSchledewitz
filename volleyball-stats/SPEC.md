@@ -28,7 +28,8 @@ Out of scope for v1: fans or club members as readers, players entering their own
 | Topic | Decision |
 |---|---|
 | Discipline | Indoor 6v6 only (rotations, libero, substitutions) |
-| League | Italian amateur, **mixed**: sets to 21, at least 2 women and 2 men on court, standard libero rules |
+| League | AmaVolley (Italian amateur), **mixed**: sets to 21, at least 2 women and 2 men on court, standard libero rules |
+| Language | English interface |
 | Platform | Laptop / web browser |
 | Entry timing | Live during the match, plus editing afterwards |
 | Teams | Own team only (no opponent scouting) |
@@ -144,8 +145,10 @@ recording sets.
 - **Rotation numbering**: R1–R6 = the zone the setter is in (R1 = setter serving from
   zone 1). The app always shows the current rotation and the six players on court.
 - **Set end and match format**: set by a **rules preset**. Default preset
-  *Italia amatoriale misto*: sets to **21**, win by 2; tie-break set and number of sets
-  configurable (see open questions). A *FIVB* preset (25 / tie-break 15, best of 5) is
+  *AmaVolley misto*: sets to **21**, win by 2; tie-break set and number of sets
+  configurable. To be checked against the
+  [AmaVolley 2025/26 rulebook](https://www.amavolley.it/file/regolamento-amavolley-2025-2026.pdf)
+  (see open questions). A *FIVB* preset (25 / tie-break 15, best of 5) is
   included for comparison and other leagues; every preset value can be edited.
 - **Mixed-team rule**: each player has an optional gender. When genders are set, the app
   checks after every lineup change (start of set, substitution, libero swap) that
@@ -281,7 +284,7 @@ pass-rating and attack rows appear only when those skills were tracked.
 
 **In v1:** roster and seasons; match setup with lineups; tracking profiles and per-skill
 toggles; live entry (codes + buttons); rules engine (score, rotation, subs, libero,
-mixed-gender check) with the *Italia amatoriale misto* preset; editing after the match;
+mixed-gender check) with the *AmaVolley misto* preset; editing after the match;
 box score, rotation analysis, season trends; PDF/CSV/JSON export; offline local storage.
 
 **Later:**
@@ -297,6 +300,10 @@ box score, rotation analysis, season trends; PDF/CSV/JSON export; offline local 
 
 ## 13. Open questions
 
+These come from the
+[AmaVolley 2025/26 rulebook](https://www.amavolley.it/file/regolamento-amavolley-2025-2026.pdf),
+which still needs to be read:
+
 1. **Match format**: best of 3, best of 5, or a fixed number of sets that are always
    played (common in amateur leagues)? Is the deciding set to 15? Is there a point cap
    (e.g. a set ends at 23–22)?
@@ -304,11 +311,11 @@ box score, rotation analysis, season trends; PDF/CSV/JSON export; offline local 
    players as some amateur leagues allow?
 3. **Mixed rule details**: does the libero count towards the 2 + 2? Are there other
    mixed rules to check (e.g. restrictions on men attacking from the back row)?
-4. **Language**: Italian or English interface, or both?
 
 ### Resolved
 
-- League: Italian amateur, mixed, sets to 21, at least 2 of each gender on court,
+- Language: English interface
+- League: AmaVolley (Italian amateur), mixed, sets to 21, at least 2 of each gender on court,
   standard libero rules (§6)
 - Sets: not entered; set errors only, assists inferred (§5)
 - Digs: every successful dig counts (§5)
