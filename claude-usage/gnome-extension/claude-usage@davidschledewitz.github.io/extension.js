@@ -409,9 +409,13 @@ class ClaudeUsageIndicator extends PanelMenu.Button {
                 const scale = new St.BoxLayout({style_class: 'claude-usage-scale', x_expand: true});
                 scale.layout_manager.homogeneous = true;
                 const start = limit.resetsAt - limit.window;
+                // Each segment runs reset-time to reset-time; label it with the
+                // day at its midpoint (the day it mostly covers), centred.
                 for (let k = 0; k < days; k++) {
-                    const day = GLib.DateTime.new_from_unix_local(Math.floor(start + k * U.DAY)).format('%a');
-                    scale.add_child(this._label(day, 'claude-usage-dim', {x_expand: true}));
+                    const day = GLib.DateTime.new_from_unix_local(Math.floor(start + (k + 0.5) * U.DAY)).format('%a');
+                    const label = this._label(day, 'claude-usage-dim', {x_expand: true});
+                    label.add_style_class_name('claude-usage-scale-day');
+                    scale.add_child(label);
                 }
                 section.add_child(scale);
             }

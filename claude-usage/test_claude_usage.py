@@ -92,6 +92,19 @@ class FormatTests(unittest.TestCase):
         self.assertIsNone(cu.day_scale(week, 20))  # too narrow
         self.assertIsNone(cu.day_scale(cu.parse_limits(SAMPLE)[0], 70))  # 5h has no days
 
+    def test_day_scale_names_the_day_each_segment_mostly_covers(self):
+        # Reset Sunday 20:00 local: the first segment (Sun 20:00 -> Mon 20:00) is Monday.
+        reset = datetime(2026, 10, 25, 20, 0).astimezone()
+        week = cu.parse_limits({"seven_day": {"utilization": 5.0, "resets_at": reset.isoformat()}})[0]
+        with mock.patch.dict(os.environ, {"LC_ALL": "C"}):
+            scale = cu.day_scale(week, 70)
+        self.assertEqual(scale.split(), ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"])
+        self.assertEqual(scale.index("Mon"), 4)  # centred in its 10-wide segment
+        # A morning reset keeps the reset's own weekday first.
+        reset = datetime(2026, 10, 25, 8, 0).astimezone()
+        week = cu.parse_limits({"seven_day": {"utilization": 5.0, "resets_at": reset.isoformat()}})[0]
+        self.assertEqual(cu.day_scale(week, 70).split()[0], "Sun")
+
     def test_line(self):
         self.assertEqual(cu.render_line(SAMPLE, NOW), "5h 40% (2h00m) · wk 12% (3d4h)")
 

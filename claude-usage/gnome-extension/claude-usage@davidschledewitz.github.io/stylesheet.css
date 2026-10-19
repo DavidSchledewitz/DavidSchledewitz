@@ -40,6 +40,10 @@
   height: 14px;
 }
 
+.claude-usage-scale-day {
+  text-align: center;
+}
+
 .claude-usage-scale {
   font-size: 0.8em;
 }

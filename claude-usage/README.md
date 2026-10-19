@@ -31,8 +31,9 @@ How to read it:
 - `┃` marks **now**: how much of the window has passed. If the fill stops
   left of it, you're under pace.
 - On weekly bars, a tick marks each day. Each segment is one day's even share
-  (about 14%) of the weekly budget. The weekday under each tick is when that
-  day starts. Days begin at your reset time, not at midnight.
+  (about 14%) of the weekly budget. Days run from your reset time to the same
+  time the next day, not midnight to midnight. Each segment is labelled with
+  the day it mostly covers: with a Sunday 20:00 reset, the first one is Mon.
 - "x% over/under pace" compares your usage with an even burn across the
   window. The last part extrapolates your current rate linearly. It's shown
   in yellow when you're over pace.

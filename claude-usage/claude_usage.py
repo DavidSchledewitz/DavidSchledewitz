@@ -331,17 +331,20 @@ def window_days(limit: Limit) -> int:
 
 
 def day_scale(limit: Limit, width: int) -> str | None:
-    """Weekday labels under a weekly bar, one at the start of each day-segment.
-    The window starts exactly one week before the reset, so each tick falls on
-    the reset's time of day."""
+    """Weekday labels under a weekly bar, centred in each day-segment. The
+    window starts exactly one week before the reset, so segments run from the
+    reset's time of day to the same time next day. Each is labelled with the
+    day at its midpoint, the day it mostly covers: with a Sunday 20:00 reset
+    the first segment reads Mon, not Sun."""
     days = window_days(limit)
     if not days or limit.resets_at is None or width / days < 5:
         return None
     start = limit.resets_at - timedelta(seconds=limit.window)
+    seg = width / days
     line = [" "] * width
     for k in range(days):
-        label = (start + timedelta(days=k)).astimezone().strftime("%a")
-        pos = round(k * width / days)
+        label = (start + timedelta(days=k + 0.5)).astimezone().strftime("%a")
+        pos = max(0, round(k * seg + (seg - len(label)) / 2))
         line[pos:pos + len(label)] = label
     return "".join(line[:width])
 
