@@ -4,8 +4,8 @@ Status: draft from the requirements interview, 2026-10-19. Nothing is built yet.
 
 ## 1. Summary
 
-A laptop/web app for statistics on **one indoor (6v6) mixed team** in an Italian
-amateur league. A statistician enters actions live during a match, and anyone can
+A laptop/web app for statistics on **one indoor (6v6) mixed team** in the AmaVolley
+amateur league (Trento). A statistician enters actions live during a match, and anyone can
 correct or complete them afterwards. The app tracks the full game state (score, serve,
 rotation, lineup), so the coach gets a per-player box score, a rotation analysis and
 season trends. It works offline in any gym and stores data on the device. Optional sync
@@ -28,7 +28,7 @@ Out of scope for v1: fans or club members as readers, players entering their own
 | Topic | Decision |
 |---|---|
 | Discipline | Indoor 6v6 only (rotations, libero, substitutions) |
-| League | AmaVolley (Italian amateur), **mixed**: sets to 21, at least 2 women and 2 men on court, standard libero rules |
+| League | AmaVolley (Trento), **mixed**: sets to 21 (cap 23), tie-break to 13 (cap 16), best of 5, exactly 3 women + 3 men on court, libero exempt from parity |
 | Language | English interface |
 | Platform | Laptop / web browser |
 | Entry timing | Live during the match, plus editing afterwards |
@@ -82,7 +82,7 @@ editing afterwards and recalculating stats straightforward and consistent.
 Team ─┬─ Player (id, name, jersey #, gender (optional), positions: S/OH/MB/OPP/L, active flag)
       └─ Season ── Match (date, opponent name, home/away, competition, rules preset,
                           tracking profile, counts-in-season flag)
-                     └─ Set (number, starting lineup, first server)
+                     └─ Set (number, starting lineup, liberos (0–2), first server)
                           └─ Event (ordered, timestamped)
 ```
 
@@ -94,7 +94,9 @@ Event types:
 - `opponent_error`: the opponent lost the rally by their own fault
 - `substitution`: player out, player in
 - `libero_swap`: libero in/out for a player
-- `timeout`, `set_start`, `set_end`, `manual_correction` (score or rotation override)
+- `penalty`: red card, point to the opponent (art. 31)
+- `timeout`, `set_start`, `set_end`, `forfeit`, `manual_correction` (score or rotation
+  override)
 
 A rally is the sequence of events between two serves. Its winner is **inferred** from
 the terminal event (see §6), so the statistician never enters "point us/them" separately
@@ -144,23 +146,35 @@ recording sets.
   gets the serve (sideout) and **our team rotates** when we win the serve back.
 - **Rotation numbering**: R1–R6 = the zone the setter is in (R1 = setter serving from
   zone 1). The app always shows the current rotation and the six players on court.
-- **Set end and match format**: set by a **rules preset**. Default preset
-  *AmaVolley misto*: sets to **21**, win by 2; tie-break set and number of sets
-  configurable. To be checked against the
-  [AmaVolley 2025/26 rulebook](https://www.amavolley.it/file/regolamento-amavolley-2025-2026.pdf)
-  (see open questions). A *FIVB* preset (25 / tie-break 15, best of 5) is
-  included for comparison and other leagues; every preset value can be edited.
-- **Mixed-team rule**: each player has an optional gender. When genders are set, the app
-  checks after every lineup change (start of set, substitution, libero swap) that
-  **at least 2 women and 2 men** are on court and warns if not. The minimum is a preset
-  value, and the check can be switched off.
-- **Substitutions**: tracked per set, with a warning (not a hard block) when a preset's
-  limit is exceeded or the re-entry rules are broken.
-- **Libero**: standard rules; one or two liberos per match. The statistician sets which
-  players the libero replaces (typically the middle blockers in the back row). Swaps are
-  then **automatic** when such a player rotates to the back row or after they serve,
-  with a one-key override for exceptions. Libero swaps that would break the gender
-  minimum trigger the same warning.
+- **Rules preset**: all rule values come from an editable preset. The default,
+  *AmaVolley misto 2025/26*, follows the [AmaVolley 2025/26 rulebook](https://www.amavolley.it/file/regolamento-amavolley-2025-2026.pdf)
+  (article numbers in brackets). A *FIVB* preset (25 / tie-break 15, best of 5, no point
+  cap, no gender rule) is included for other leagues.
+- **Set end** (art. 27): sets to **21**, win by 2, **capped at 23** (23–22 wins the set).
+  Tie-break (5th set) to **13**, win by 2, **capped at 16**. The app ends the set
+  automatically and asks for confirmation.
+- **Match format** (art. 29): best of 5. A forfeit is recorded as 3–0 with every set 21–0
+  (art. 10.5) and is excluded from player stats.
+- **League points** (art. 29): 3–0 → 3 points, 3–2 → 2, 2–3 → 1, 0–3 → 0. 3–1 and 1–3
+  are not listed in the rulebook; the preset assumes 3 and 0 as in FIPAV (editable).
+- **Timeouts** (art. 28): 2 per team per set.
+- **Gender parity** (art. 19): **exactly 3 women and 3 men** on court. When player
+  genders are set, the app checks after every lineup change and warns if parity is broken.
+  The **libero is exempt** (art. 22): a libero may replace a player of the other gender,
+  and the court still counts as the replaced player's gender.
+- **Substitutions** (art. 23): max **6 per set**. A player who leaves can only come back
+  for the player who replaced them, and that replacement cannot re-enter in the same
+  set. Substitutions are **man for man, woman for woman**. Injury substitutions (art. 24)
+  also keep parity and are flagged separately. Rule breaks are warnings, never blocks.
+- **Libero** (art. 22): up to **2 liberos per set**, and the libero can change every set,
+  so it is chosen at each set start, not once per match. The libero replaces back-row
+  players only and does not count as a substitution; two liberos can swap freely with
+  each other and the replaced player. The statistician sets which players the libero
+  replaces (typically the middle blockers). Swaps are then **automatic** when such a player
+  rotates to the back row or after they serve, with a one-key override. Libero actions
+  that the rules forbid (serve, block, attack above the net) are rejected with a hint.
+- **Penalties** (art. 31): a red card gives the rally and the point to the opponent and
+  is recorded as its own event (`rc`), so it is not counted as anyone's error.
 - **Rally winner inference**: when an own-team action ends the rally (table in §5), the
   rally closes automatically. Otherwise, the statistician presses
   "opponent point" or "opponent error".
@@ -184,6 +198,7 @@ oe                    # opponent error → our point
 sub 11>4              # 11 in for 4
 lib                   # manual libero swap override
 to                    # our timeout
+rc                    # red card → opponent point
 ```
 
 - **Shortcut**: the server defaults to whoever is in zone 1, so `S+` alone works.
@@ -250,6 +265,7 @@ pass-rating and attack rows appear only when those skills were tracked.
 
 - Per-player line charts across matches (hitting %, pass average, serve error %, …)
 - Team trends: sideout %, break-point %, per-rotation +/−
+- Results list with set scores and league points per match (3/2/1/0)
 - Filters: date range, opponent, home/away, competition
 - Minimum-attempts threshold so small samples don't mislead (shown greyed out)
 
@@ -300,23 +316,17 @@ box score, rotation analysis, season trends; PDF/CSV/JSON export; offline local 
 
 ## 13. Open questions
 
-These come from the
-[AmaVolley 2025/26 rulebook](https://www.amavolley.it/file/regolamento-amavolley-2025-2026.pdf),
-which still needs to be read:
-
-1. **Match format**: best of 3, best of 5, or a fixed number of sets that are always
-   played (common in amateur leagues)? Is the deciding set to 15? Is there a point cap
-   (e.g. a set ends at 23–22)?
-2. **Substitution limit**: 6 per set as in FIPAV, or unlimited / free rotation of
-   players as some amateur leagues allow?
-3. **Mixed rule details**: does the libero count towards the 2 + 2? Are there other
-   mixed rules to check (e.g. restrictions on men attacking from the back row)?
+1. **3–1 results**: the rulebook only lists league points for 3–0, 3–2, 2–3 and 0–3.
+   The preset assumes 3–1 → 3 points and 1–3 → 0, as in FIPAV. Worth confirming with
+   the league.
 
 ### Resolved
 
 - Language: English interface
-- League: AmaVolley (Italian amateur), mixed, sets to 21, at least 2 of each gender on court,
-  standard libero rules (§6)
+- League: AmaVolley mixed, rules from the [AmaVolley 2025/26 rulebook](https://www.amavolley.it/file/regolamento-amavolley-2025-2026.pdf):
+  sets to 21 (cap 23), tie-break to 13 (cap 16), best of 5, 2 timeouts per set,
+  exactly 3 women + 3 men on court, 6 same-gender substitutions per set, up to 2 liberos
+  per set, libero exempt from parity (§6)
 - Sets: not entered; set errors only, assists inferred (§5)
 - Digs: every successful dig counts (§5)
 - Free balls: not receptions; only errors are counted (§5)
