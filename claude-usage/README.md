@@ -8,6 +8,56 @@ resets. It comes in two forms:
 - **A GNOME top-bar extension**: an indicator next to the clock and wifi, with
   a popup. See [GNOME top bar](#gnome-top-bar-ubuntu).
 
+This is a beta built on an undocumented Anthropic endpoint, so it can
+break without notice.
+
+## Quick start
+
+**You need:**
+- A Claude **Pro or Max** plan.
+- A login in **Claude Code**, the command-line tool. The Claude desktop app
+  keeps its login where other programs can't read it, so it doesn't count. If
+  you don't have Claude Code yet:
+  ```bash
+  curl -fsSL https://claude.ai/install.sh | bash
+  claude          # then type /login and pick your Claude account
+  ```
+- For the top bar: Ubuntu / GNOME. It's tested on Ubuntu 24.04 (GNOME 46).
+
+**Install:**
+
+```bash
+git clone https://github.com/DavidSchledewitz/DavidSchledewitz.git
+cd DavidSchledewitz
+
+# Top-bar indicator. Afterwards, log out and back in once.
+./claude-usage/gnome-extension/install_claude_bar.sh
+
+# Terminal app, as the command `claude-usage` in any folder
+mkdir -p ~/.local/bin
+ln -sf "$PWD/claude-usage/claude_usage.py" ~/.local/bin/claude-usage
+```
+
+If `~/.local/bin` didn't exist before, open a new terminal. Then:
+
+```bash
+claude-usage            # full live view (r = refresh, q = quit)
+claude-usage --window   # small separate window
+```
+
+**Update:** `git pull`. The terminal app is updated right away. For the
+top bar, run `install_claude_bar.sh` again and log out and back in.
+
+**Remove:** `./claude-usage/gnome-extension/install_claude_bar.sh --uninstall`
+and `rm ~/.local/bin/claude-usage`.
+
+**Something looks wrong?**
+- *Login expired*: run `claude` once.
+- *Retrying in…*: the usage server is rate-limiting. It retries by itself.
+- Anything else: send a screenshot and the output of `gnome-shell --version`.
+
+## What it shows
+
 ```
  Claude usage · Max plan
 
@@ -38,21 +88,14 @@ How to read it:
   window. The last part extrapolates your current rate linearly. It's shown
   in yellow when you're over pace.
 
-## Install
+## Other ways to run the terminal app
 
-Link the script into `~/.local/bin`, which Ubuntu puts on your `PATH`. Then
-`claude-usage` works from any folder, and a `git pull` updates it with no
-reinstall:
-
-```bash
-mkdir -p ~/.local/bin
-ln -sf "$PWD/claude-usage/claude_usage.py" ~/.local/bin/claude-usage   # run from the repo root
-```
-
-If `~/.local/bin` didn't exist before, open a new terminal (or log out and in)
-so it's on your `PATH`. Alternatively, `pipx install ./claude-usage` works
-too, but then you have to re-run it after each update. Plain
-`pip install --user` is blocked on Ubuntu 24.04.
+- **Without installing:** `python3 claude-usage/claude_usage.py`. It needs
+  Python 3.8+ and no packages.
+- **With pipx:** `pipx install ./claude-usage`. Re-run it after each update.
+  (Plain `pip install --user` is blocked on Ubuntu 24.04.)
+- The `~/.local/bin` link from the Quick start is the easiest option: it
+  points at the repo, so `git pull` updates it.
 
 ## Usage
 
