@@ -162,7 +162,7 @@ recording sets.
   genders are set, the app checks after every lineup change and warns if parity is broken.
   The **libero is exempt** (art. 22): a libero may replace a player of the other gender,
   and the court still counts as the replaced player's gender.
-- **Substitutions** (art. 23): max **6 per set**. A player who leaves can only come back
+- **Substitutions** (art. 23): max **8 per set** (raised from the rulebook's 6, per the league; editable in the preset). A player who leaves can only come back
   for the player who replaced them, and that replacement cannot re-enter in the same
   set. Substitutions are **man for man, woman for woman**. Injury substitutions (art. 24)
   also keep parity and are flagged separately. Rule breaks are warnings, never blocks.
@@ -325,7 +325,7 @@ box score, rotation analysis, season trends; PDF/CSV/JSON export; offline local 
 - Language: English interface
 - League: AmaVolley mixed, rules from the [AmaVolley 2025/26 rulebook](https://www.amavolley.it/file/regolamento-amavolley-2025-2026.pdf):
   sets to 21 (cap 23), tie-break to 13 (cap 16), best of 5, 2 timeouts per set,
-  exactly 3 women + 3 men on court, 6 same-gender substitutions per set, up to 2 liberos
+  exactly 3 women + 3 men on court, 8 same-gender substitutions per set, up to 2 liberos
   per set, libero exempt from parity (§6)
 - Sets: not entered; set errors only, assists inferred (§5)
 - Digs: every successful dig counts (§5)
