@@ -40,23 +40,53 @@ How to read it:
 
 ## Install
 
+Link the script into `~/.local/bin`, which Ubuntu puts on your `PATH`. Then
+`claude-usage` works from any folder, and a `git pull` updates it with no
+reinstall:
+
 ```bash
-pipx install ./claude-usage      # or: pip install --user ./claude-usage
-claude-usage
+mkdir -p ~/.local/bin
+ln -sf "$PWD/claude-usage/claude_usage.py" ~/.local/bin/claude-usage   # run from the repo root
 ```
 
-You can also run it without installing: `python3 claude_usage.py`.
+If `~/.local/bin` didn't exist before, open a new terminal (or log out and in)
+so it's on your `PATH`. Alternatively, `pipx install ./claude-usage` works
+too, but then you have to re-run it after each update. Plain
+`pip install --user` is blocked on Ubuntu 24.04.
 
 ## Usage
 
 | Command | What it does |
 |---|---|
 | `claude-usage` | Live dashboard. Polls every 5 min and ticks every second. `r` refreshes, `q` quits. |
-| `claude-usage --once` | Prints the dashboard once. |
+| `claude-usage -c`, `--compact` | Small live dashboard (about 42×6). It's used automatically when the window is under 50 columns. |
+| `claude-usage -w`, `--window` | Opens the compact dashboard in its own small GNOME Terminal window, zoomed out to 0.8 and without a menu bar. |
+| `claude-usage --once` | Prints the dashboard once (add `-c` for the small one). |
 | `claude-usage --line` | Prints one line, e.g. `5h 62% (1h47m) · wk 34% (4d5h)` |
 | `claude-usage --json` | Prints the raw API response. |
-| `-i 600` | Polls every 600 s instead (minimum 60). |
+| `--zoom 0.7` | Font scale for `--window` (1.0 = normal). |
+| `-i 600`, `--interval 600` | Seconds between polls in live mode (default 300, minimum 60). |
+| `--cache-ttl 600` | How old cached data `--line` may reuse (default 300 s). |
 | `--no-color` / `NO_COLOR=1` | Plain output. |
+| `--version`, `-h` | Version, help. |
+
+Environment variables: `CLAUDE_CONFIG_DIR` (where Claude Code's login lives,
+default `~/.claude`), `CLAUDE_CODE_OAUTH_TOKEN` (use this token instead),
+`XDG_CACHE_HOME` (cache location), `NO_COLOR`.
+
+### A keyboard shortcut for the small window
+
+Open Settings, then Keyboard, then View and Customize Shortcuts, then Custom
+Shortcuts, and click **+**:
+
+- Name: `Claude usage`
+- Command: `/home/YOUR_USER/.local/bin/claude-usage --window` (use the full
+  path; shortcuts don't always see `~/.local/bin`)
+- Shortcut: whatever you like, e.g. Super+U
+
+GNOME on Wayland doesn't let apps place their own windows, so the window
+opens wherever GNOME puts it. Drag it to a corner. To keep it above other
+windows, right-click its title bar and choose **Always on Top**.
 
 ### In a status bar
 

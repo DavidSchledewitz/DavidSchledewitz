@@ -124,6 +124,33 @@ class FormatTests(unittest.TestCase):
         self.assertEqual(b.index("┃"), 10)
 
 
+class CompactTests(unittest.TestCase):
+    def test_compact_layout_fits_and_has_rows(self):
+        state = cu.State(data=SAMPLE, fetched_at=None, plan="pro")
+        lines = cu.render_compact(state, NOW, cu.Style(False), live=True)
+        self.assertTrue(all(len(l) <= cu.WINDOW_SIZE[0] for l in lines), lines)
+        text = "\n".join(lines)
+        self.assertIn("Claude · Pro", text)
+        self.assertIn("2:00:00", text)      # 5h countdown with seconds
+        self.assertIn("3d4h", text)         # weekly
+        self.assertIn("$1.47", text)        # extra usage spent
+        self.assertLessEqual(len(lines), cu.WINDOW_SIZE[1])
+
+    def test_compact_weekly_ticks_on_whole_cells(self):
+        b = cu.bar(10, None, cu.COMPACT_BAR, cu.Style(False), 7)
+        self.assertEqual([i for i, c in enumerate(b) if c in "│▓"], [3, 6, 9, 12, 15, 18])
+
+    def test_window_command(self):
+        with mock.patch.object(cu.shutil, "which", lambda name: "/usr/bin/" + name if name == "gnome-terminal" else None), \
+                mock.patch.object(cu.subprocess, "Popen") as popen:
+            self.assertEqual(cu.main(["--window", "--zoom", "0.7"]), 0)
+        cmd = popen.call_args[0][0]
+        self.assertEqual(cmd[:2], ["gnome-terminal", "--window"])
+        self.assertIn("--zoom=0.7", cmd)
+        self.assertIn("--geometry=45x8-0+0", cmd)
+        self.assertEqual(cmd[cmd.index("--") + 3], "--compact")
+
+
 class _Handler(BaseHTTPRequestHandler):
     seen = {}
 

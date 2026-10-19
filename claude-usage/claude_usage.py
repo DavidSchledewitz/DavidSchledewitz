@@ -8,6 +8,8 @@ uses. No third-party dependencies.
 
 Modes:
     claude-usage            live dashboard (q to quit, r to refresh)
+    claude-usage --compact  small live dashboard (also automatic in narrow windows)
+    claude-usage --window   open the small dashboard in its own terminal window
     claude-usage --once     print the dashboard once and exit
     claude-usage --line     one compact line, for tmux / status bars
     claude-usage --json     raw JSON from the API
@@ -21,6 +23,7 @@ import os
 import shutil
 import subprocess
 import sys
+import textwrap
 import time
 import urllib.error
 import urllib.request
@@ -454,6 +457,57 @@ def render_line(data: dict, now: datetime) -> str:
     return " · ".join(parts)
 
 
+COMPACT_BAR = 21  # 7 days x 3 cells, so weekly ticks land on whole cells
+COMPACT_WIDTH = 1 + 6 + COMPACT_BAR + 5 + 8  # " label  bar  pct  right"
+COMPACT_BELOW = 50  # live mode switches to compact in windows narrower than this
+
+
+def render_compact(state: "State", now: datetime, st: Style, live: bool) -> list[str]:
+    """A small layout (about 42x6) for a little window in a screen corner."""
+    head = " Claude" + (f" · {state.plan.capitalize()}" if state.plan else "")
+    age = f"{fmt_compact(max(0, time.time() - state.fetched_at))} ago" if state.fetched_at else ""
+    lines = [st(head, "1") + " " * max(1, COMPACT_WIDTH - len(head) - len(age)) + st(age, "90")]
+
+    def row(label: str, pct: float | None, elapsed: float | None, days: int, right: str) -> str:
+        pct_txt = "   —" if pct is None else f"{pct:4.0f}%"
+        return (" " + st(f"{label[:6]:<6}", "1") + bar(pct, elapsed, COMPACT_BAR, st, days)
+                + st(f"{pct_txt:>5}", "1", st.for_pct(pct)) + f" {right:>7}")
+
+    if state.data is not None:
+        day_row_done = False
+        for limit in parse_limits(state.data):
+            left = limit.seconds_left(now)
+            if left is None:
+                right = "—"
+            elif left < DAY and live:
+                h, rem = divmod(int(left), HOUR)
+                right = f"{h}:{rem // 60:02d}:{rem % 60:02d}"
+            else:
+                right = fmt_compact(left)
+            days = window_days(limit)
+            lines.append(row(limit.short, limit.pct, limit.elapsed_fraction(now), days, right))
+            if days and limit.resets_at is not None and not day_row_done:
+                # Initial of the day each segment mostly covers, centred in it.
+                start = limit.resets_at - timedelta(seconds=limit.window)
+                seg = COMPACT_BAR / days
+                cells = [" "] * COMPACT_BAR
+                for k in range(days):
+                    cells[int(k * seg + seg / 2)] = (start + timedelta(days=k + 0.5)).astimezone().strftime("%a")[:1]
+                lines.append(" " * 7 + st("".join(cells), "90"))
+                day_row_done = True
+        extra = parse_extra(state.data)
+        if extra is not None:
+            spent = fmt_money(extra.used) if extra.used is not None else ""
+            lines.append(row("extra", extra.pct, None, 0, spent))
+    elif not state.error:
+        lines.append(st(" loading…", "90"))
+
+    if state.error:
+        for part in textwrap.wrap(state.error, COMPACT_WIDTH - 3)[:2]:
+            lines.append(st(f" ! {part}", "33" if state.data is not None else "31"))
+    return lines
+
+
 # --------------------------------------------------------------------------
 # state, cache
 
@@ -562,7 +616,7 @@ class Terminal:
         return sys.stdin.read(1) if ready else None
 
 
-def run_live(interval: float, st: Style) -> None:
+def run_live(interval: float, st: Style, compact: bool = False) -> None:
     state = State()
     try:
         state.plan = load_credentials().plan
@@ -577,12 +631,44 @@ def run_live(interval: float, st: Style) -> None:
             if time.time() >= state.next_fetch:
                 state.refresh(interval)
             cols = shutil.get_terminal_size((80, 24)).columns
-            term.draw(render(state, datetime.now(timezone.utc), cols, st, live=True))
+            now = datetime.now(timezone.utc)
+            if compact or cols < COMPACT_BELOW:
+                term.draw(render_compact(state, now, st, live=True))
+            else:
+                term.draw(render(state, now, cols, st, live=True))
             key = term.read_key(1 - (time.time() % 1))  # tick on the second
             if key in ("q", "Q", "\x1b", "\x03"):
                 return
             if key in ("r", "R"):
                 state.next_fetch = 0
+
+
+# --------------------------------------------------------------------------
+# small window
+
+
+WINDOW_SIZE = (COMPACT_WIDTH + 4, 8)  # columns, rows; +4 leaves room for the scrollbar
+
+
+def open_window(zoom: float, passthrough: list[str]) -> int:
+    """Open the compact dashboard in its own small terminal window. Font size
+    can't be changed from inside a running terminal, so this starts a new
+    GNOME Terminal window zoomed out and sized to fit."""
+    me = [sys.executable, os.path.realpath(__file__), "--compact", *passthrough]
+    cols, rows = WINDOW_SIZE
+    if shutil.which("gnome-terminal"):
+        # -0+0 asks for the top-right corner; GNOME on Wayland ignores positions.
+        cmd = ["gnome-terminal", "--window", "--hide-menubar", "--title=Claude usage",
+               f"--geometry={round(cols)}x{rows}-0+0", f"--zoom={zoom}", "--", *me]
+    elif shutil.which("x-terminal-emulator"):
+        cmd = ["x-terminal-emulator", "-e", *me]  # size and zoom unsupported here
+    else:
+        print("claude-usage: no gnome-terminal or x-terminal-emulator found. "
+              "Run `claude-usage --compact` in a small terminal instead.", file=sys.stderr)
+        return 1
+    subprocess.Popen(cmd, start_new_session=True,
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return 0
 
 
 # --------------------------------------------------------------------------
@@ -598,6 +684,12 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--once", action="store_true", help="print the dashboard once and exit")
     mode.add_argument("--line", action="store_true", help="print one compact line (for tmux/status bars)")
     mode.add_argument("--json", action="store_true", help="print the raw API response")
+    mode.add_argument("-w", "--window", action="store_true",
+                      help="open the compact dashboard in its own small GNOME Terminal window")
+    p.add_argument("-c", "--compact", action="store_true",
+                   help=f"small layout (also automatic in windows under {COMPACT_BELOW} columns)")
+    p.add_argument("--zoom", type=float, default=0.8,
+                   help="font scale for --window, 1.0 = normal (default 0.8)")
     p.add_argument("-i", "--interval", type=float, default=300,
                    help="seconds between API polls in live mode (default 300, min 60)")
     p.add_argument("--cache-ttl", type=float, default=300,
@@ -608,11 +700,15 @@ def main(argv: list[str] | None = None) -> int:
 
     color = not args.no_color and "NO_COLOR" not in os.environ
     interval = max(60.0, args.interval)
-    live = not (args.once or args.line or args.json)
+    live = not (args.once or args.line or args.json or args.window)
+
+    if args.window:
+        passthrough = [f"--interval={interval:g}"] + (["--no-color"] if args.no_color else [])
+        return open_window(args.zoom, passthrough)
 
     if live and sys.stdout.isatty():
         try:
-            run_live(interval, Style(color))
+            run_live(interval, Style(color), compact=args.compact)
         except KeyboardInterrupt:
             pass
         return 0
@@ -638,7 +734,10 @@ def main(argv: list[str] | None = None) -> int:
     else:
         state = State(data=data, fetched_at=fetched_at, plan=plan)
         st = Style(color and sys.stdout.isatty())
-        print("\n".join(render(state, now, shutil.get_terminal_size((80, 24)).columns, st, live=False)))
+        if args.compact:
+            print("\n".join(render_compact(state, now, st, live=False)))
+        else:
+            print("\n".join(render(state, now, shutil.get_terminal_size((80, 24)).columns, st, live=False)))
     return 0
 
 
