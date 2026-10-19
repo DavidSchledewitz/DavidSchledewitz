@@ -4,11 +4,15 @@ Status: draft from the requirements interview, 2026-10-19. Nothing is built yet.
 
 ## 1. Summary
 
-A laptop/web app for statistics on **one indoor (6v6) team**. A statistician enters
-actions live during a match, and anyone can correct or complete them afterwards. The
-app tracks the full game state (score, serve, rotation, lineup), so the coach gets a
-per-player box score, a rotation analysis and season trends. It works offline in any
-gym and stores data on the device. Optional sync comes later.
+A laptop/web app for statistics on **one indoor (6v6) mixed team** in an Italian
+amateur league. A statistician enters actions live during a match, and anyone can
+correct or complete them afterwards. The app tracks the full game state (score, serve,
+rotation, lineup), so the coach gets a per-player box score, a rotation analysis and
+season trends. It works offline in any gym and stores data on the device. Optional sync
+comes later.
+
+**Everything beyond the score is optional.** Each match can record as much or as little
+as the statistician can manage, and the reports show only what was recorded (§3.1).
 
 ## 2. Users
 
@@ -24,18 +28,48 @@ Out of scope for v1: fans or club members as readers, players entering their own
 | Topic | Decision |
 |---|---|
 | Discipline | Indoor 6v6 only (rotations, libero, substitutions) |
+| League | Italian amateur, **mixed**: sets to 21, at least 2 women and 2 men on court, standard libero rules |
 | Platform | Laptop / web browser |
 | Entry timing | Live during the match, plus editing afterwards |
 | Teams | Own team only (no opponent scouting) |
-| Skills | Serve, reception, attack, block, dig, set |
-| Detail | Simple outcomes. **Exception: reception gets a 0–3 rating** |
+| Skills | Serve, reception, attack, block, dig, set errors, free-ball errors, each optional |
+| Detail | Simple outcomes. **Exception: reception gets a 0–3 rating** (optional) |
+| Sets | Not recorded by default (too much work); only set errors. Assists are inferred |
+| Digs | Every successful dig counts |
+| Free balls | Not a reception. Only errors on free balls are counted |
 | Game state | Full rally tracking: score, serving team, rotation |
 | Lineup | Fully tracked: starting six per set, substitutions, libero swaps |
 | Input | Keyboard codes **and** clickable buttons |
 | Reports | Post-match box score, rotation analysis, season trends |
+| Sharing | PDF export is enough until sync exists |
 | Storage | Local-first; optional sync later |
 | Video | Not in v1 |
 | Scope | One team, several seasons |
+
+### 3.1 Optional by design
+
+Nothing except the score is mandatory. The app must stay useful when the statistician
+only records part of the game, and must never show "0" where it means "not recorded".
+
+- **Tracking profiles** per match, switchable mid-match:
+  - *Score only*: rally winner, rotation and lineup. Already gives sideout % and
+    +/− per rotation.
+  - *Basic*: + serve and attack outcomes, plus errors from any skill.
+  - *Full*: + reception rating, blocks, digs, set errors, free-ball errors.
+  - *Custom*: tick each skill on or off.
+- **Per-skill toggles**: a skill that is off disappears from the buttons, its codes are
+  rejected with a hint, and its columns show "–" (not tracked) in reports.
+- **Optional fields**: the reception rating can be skipped (`7R` = clean reception,
+  unrated); a player can be left out (`A#` = team kill, no player credited); the
+  gender of a player and the libero are optional at setup.
+- **Coverage-aware stats**: every report states what was tracked in which sets. Season
+  averages only use matches/sets where that skill was tracked, and say so (e.g.
+  "pass average: 8 of 12 matches").
+- **Optional saving**: a match can be marked *friendly / practice* and excluded from
+  season stats, or discarded entirely. Single sets can be excluded too (e.g. a set
+  nobody tracked properly).
+- **Optional rule checks**: gender, substitution and libero checks are warnings that can
+  be switched off per match, never hard blocks.
 
 ## 4. Core concepts and data model
 
@@ -44,8 +78,9 @@ on court and every statistic are *derived* by replaying the events. This makes u
 editing afterwards and recalculating stats straightforward and consistent.
 
 ```
-Team ─┬─ Player (id, name, jersey #, positions: S/OH/MB/OPP/L, active flag)
-      └─ Season ── Match (date, opponent name, home/away, competition, rules preset)
+Team ─┬─ Player (id, name, jersey #, gender (optional), positions: S/OH/MB/OPP/L, active flag)
+      └─ Season ── Match (date, opponent name, home/away, competition, rules preset,
+                          tracking profile, counts-in-season flag)
                      └─ Set (number, starting lineup, first server)
                           └─ Event (ordered, timestamped)
 ```
@@ -66,27 +101,38 @@ when an own-team action ended the rally.
 
 ## 5. Skills and outcomes
 
-Simple outcomes for every skill, except reception, which gets a pass rating.
+Simple outcomes for every skill, except reception, which gets a pass rating. Every skill
+can be switched off (§3.1).
 
 | Skill | Code | Outcomes | Ends rally? |
 |---|---|---|---|
 | Serve | `S` | `#` ace · `+` in play · `=` error | ace → we win; error → they win |
-| Reception | `R` | `3` perfect · `2` good · `1` poor · `0` error (aced) | `0` → they win |
+| Reception | `R` | `3` perfect · `2` good · `1` poor · `0` error (aced) · no digit = unrated | `0` → they win |
 | Attack | `A` | `#` kill · `+` in play · `/` blocked · `=` error | kill → we win; blocked/error → they win |
 | Block | `B` | `#` block point · `+` touch (keeps ball in play) · `=` error (net, out) | point → we win; error → they win |
 | Dig | `D` | `+` dig · `=` error (ball dropped / not playable) | error → they win |
-| Set | `E` | `+` set · `=` set error (double, lift, unhittable) | error → they win |
+| Set error | `E` | `=` set error (double, lift, unhittable) | → they win |
+| Free-ball error | `F` | `=` error on a free ball or down ball | → they win |
+
+- **Reception** is only the first contact on the opponent's **serve**. Free balls and
+  down balls are not receptions and never affect the pass average.
+- **Free balls**: only errors are recorded (`F=`). Clean free-ball passes are not
+  entered at all.
+- **Digs**: every successful dig counts (`D+`), whether or not it leads to an attack.
+- **Sets**: normal sets are **not** entered; only set errors (`E=`). An optional
+  *record every set* setting (`E+`) exists for statisticians who want more detail.
 
 Pass rating scale (common 0–3 convention):
 **3** setter has all options · **2** setter limited, still attackable · **1** only a high
 ball or free ball over · **0** ace / reception error.
 
-**Assists** are derived, not typed. When an attack is a kill, the player who made the
-last recorded set in that rally gets the assist. If no set was recorded, the assist goes
-to the designated setter on court. This fallback is a setting that can be switched off.
+**Assists** are derived, not typed. When an attack is a kill, the assist goes to the
+designated setter on court (or, if *record every set* is on, to whoever made the last
+set). Assist inference can be switched off.
 
-**Set distribution**: each attack is linked to the preceding set (or the on-court setter),
-giving "who did the setter set, at which pass quality and in which rotation".
+**Attack distribution**: each attack is stored with the current rotation and the
+rally's pass rating, giving "who attacked, after which pass, in which rotation" without
+recording sets.
 
 **Blocks**: if one player gets `B#`, it is a solo block (1.0). If two or three players get
 `B#` in the same rally, each gets a block assist (0.5).
@@ -97,15 +143,21 @@ giving "who did the setter set, at which pass quality and in which rotation".
   gets the serve (sideout) and **our team rotates** when we win the serve back.
 - **Rotation numbering**: R1–R6 = the zone the setter is in (R1 = setter serving from
   zone 1). The app always shows the current rotation and the six players on court.
-- **Set end**: 25 points (5th set 15), win by 2; match is best of 5 (or 3).
-  Configurable through **rules presets** (e.g. FIVB, youth leagues with different set
-  counts or substitution limits).
+- **Set end and match format**: set by a **rules preset**. Default preset
+  *Italia amatoriale misto*: sets to **21**, win by 2; tie-break set and number of sets
+  configurable (see open questions). A *FIVB* preset (25 / tie-break 15, best of 5) is
+  included for comparison and other leagues; every preset value can be edited.
+- **Mixed-team rule**: each player has an optional gender. When genders are set, the app
+  checks after every lineup change (start of set, substitution, libero swap) that
+  **at least 2 women and 2 men** are on court and warns if not. The minimum is a preset
+  value, and the check can be switched off.
 - **Substitutions**: tracked per set, with a warning (not a hard block) when a preset's
   limit is exceeded or the re-entry rules are broken.
-- **Libero**: one or two liberos per match. The statistician sets which players the
-  libero replaces (typically the middle blockers in the back row). Swaps are then
-  **automatic** when such a player rotates to the back row or after they serve,
-  with a one-key override for exceptions.
+- **Libero**: standard rules; one or two liberos per match. The statistician sets which
+  players the libero replaces (typically the middle blockers in the back row). Swaps are
+  then **automatic** when such a player rotates to the back row or after they serve,
+  with a one-key override for exceptions. Libero swaps that would break the gender
+  minimum trigger the same warning.
 - **Rally winner inference**: when an own-team action ends the rally (table in §5), the
   rally closes automatically. Otherwise, the statistician presses
   "opponent point" or "opponent error".
@@ -122,7 +174,8 @@ Enter to commit.
 ```
 12S+ 7R2 3A#          # 12 serves in, 7 passes a 2, 3 kills → our point, rally closed
 4S=                   # 4 serve error → opponent point
-9R3 1E+ 10A+ 5D+ 10A# # long rally, ends with a kill
+9R3 10A+ 5D+ 10A#     # long rally, ends with a kill (sets are not entered)
+2F=                   # 2 misplays a free ball → opponent point
 o                     # opponent point (no own-team action at fault)
 oe                    # opponent error → our point
 sub 11>4              # 11 in for 4
@@ -168,10 +221,13 @@ equivalent keyboard code, so users can learn the codes.
 | Attack | attempts, kills, errors, blocked, **hitting % = (K − E − Blocked) / attempts**, kill % |
 | Block | solo, assists, total blocks (solo + 0.5 × assists), block errors |
 | Dig | digs, dig errors |
-| Set | sets, assists, set errors |
+| Set | assists (inferred), set errors |
+| Other errors | free-ball errors |
 | Points | kills + aces + total blocks |
+| Errors | total points given away (serve, reception, attack, block, dig, set, free-ball errors) |
 
-Team rows also include points from opponent errors, so the totals match the score.
+Team rows also include points from opponent errors and unattributed rallies, so the
+totals match the score. Columns for skills that were not tracked show "–" (§3.1).
 
 ### 9.2 Rotation analysis
 
@@ -182,7 +238,10 @@ For each rotation R1–R6, per set, per match and per season:
 - **first-ball sideout %** = sideouts won by the first attack after the reception
 - **break-point %** = rallies won on our serve / rallies we served
 - sideout % **by pass rating** (what does a 1-pass cost us in R4?)
-- set distribution in that rotation
+- attack distribution in that rotation (who attacked, with kill rate)
+
+Score-only tracking already gives +/−, sideout % and break-point % per rotation; the
+pass-rating and attack rows appear only when those skills were tracked.
 
 ### 9.3 Season trends
 
@@ -193,7 +252,10 @@ For each rotation R1–R6, per set, per match and per season:
 
 ### 9.4 Exports
 
-- Box score as **PDF** (print layout) and **CSV**
+- Box score as **PDF** (print layout) and **CSV**. PDF is the way to share with players
+  in v1, so it must read well on a phone.
+- Choose what goes into each export: sections (box score, rotations, trends), players,
+  sets
 - Raw event log as **CSV** (for spreadsheets / own analysis)
 - Full **JSON backup**: export and import of everything, including the roster and seasons
 
@@ -217,9 +279,10 @@ For each rotation R1–R6, per set, per match and per season:
 
 ## 12. v1 scope
 
-**In v1:** roster and seasons; match setup with lineups; live entry (codes + buttons);
-rules engine (score, rotation, subs, libero); editing after the match; box score,
-rotation analysis, season trends; PDF/CSV/JSON export; offline local storage.
+**In v1:** roster and seasons; match setup with lineups; tracking profiles and per-skill
+toggles; live entry (codes + buttons); rules engine (score, rotation, subs, libero,
+mixed-gender check) with the *Italia amatoriale misto* preset; editing after the match;
+box score, rotation analysis, season trends; PDF/CSV/JSON export; offline local storage.
 
 **Later:**
 
@@ -234,14 +297,21 @@ rotation analysis, season trends; PDF/CSV/JSON export; offline local storage.
 
 ## 13. Open questions
 
-1. **Rules preset**: which league do you play in? This sets the set format,
-   substitution limit and libero rules to ship as the default.
-2. **Set recording**: should the statistician record every set (`E+`), or only set
-   errors, with assists inferred from the setter on court? Recording every set is more
-   accurate but adds a keypress to almost every rally.
-3. **Dig definition**: count every successful dig, or only digs that lead to an attack
-   attempt? Both conventions are common; pick one for consistency.
-4. **Reception on free balls / down balls**: rate them like serve receptions, or skip
-   them?
-5. **Who sees the reports**: only the coach on the same laptop, or are PDFs enough for
-   sharing with players until sync exists?
+1. **Match format**: best of 3, best of 5, or a fixed number of sets that are always
+   played (common in amateur leagues)? Is the deciding set to 15? Is there a point cap
+   (e.g. a set ends at 23–22)?
+2. **Substitution limit**: 6 per set as in FIPAV, or unlimited / free rotation of
+   players as some amateur leagues allow?
+3. **Mixed rule details**: does the libero count towards the 2 + 2? Are there other
+   mixed rules to check (e.g. restrictions on men attacking from the back row)?
+4. **Language**: Italian or English interface, or both?
+
+### Resolved
+
+- League: Italian amateur, mixed, sets to 21, at least 2 of each gender on court,
+  standard libero rules (§6)
+- Sets: not entered; set errors only, assists inferred (§5)
+- Digs: every successful dig counts (§5)
+- Free balls: not receptions; only errors are counted (§5)
+- Sharing: PDF export is enough until sync (§9.4)
+- Everything beyond the score is optional to record and save (§3.1)
