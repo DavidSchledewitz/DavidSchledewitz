@@ -1,0 +1,8 @@
+{
+  "uuid": "claude-usage@davidschledewitz.github.io",
+  "name": "Claude Usage",
+  "description": "Shows your Claude plan usage in the top bar: the 5-hour session, weekly limits and time until each resets. Uses the login stored by Claude Code.",
+  "shell-version": ["46", "47", "48", "49", "50"],
+  "url": "https://github.com/DavidSchledewitz/DavidSchledewitz",
+  "version": 1
+}
