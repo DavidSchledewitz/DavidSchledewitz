@@ -92,6 +92,7 @@ Event types:
 - `opponent_point`: the opponent won the rally with no own-team action to blame
   (e.g. an unreturnable opponent attack), optionally with a reason
 - `opponent_error`: the opponent lost the rally by their own fault
+- `our_point`: we won the rally with nobody credited (needed for score-only tracking)
 - `substitution`: player out, player in
 - `libero_swap`: libero in/out for a player
 - `penalty`: red card, point to the opponent (art. 31)
@@ -193,6 +194,7 @@ Enter to commit.
 4S=                   # 4 serve error → opponent point
 9R3 10A+ 5D+ 10A#     # long rally, ends with a kill (sets are not entered)
 2F=                   # 2 misplays a free ball → opponent point
+p                     # our point, nobody credited (score-only tracking)
 o                     # opponent point (no own-team action at fault)
 oe                    # opponent error → our point
 sub 11>4              # 11 in for 4

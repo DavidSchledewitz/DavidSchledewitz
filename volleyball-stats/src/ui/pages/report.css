@@ -1,0 +1,23 @@
+/* Print sizing for reports: the PDF is shared with players and read on phones. */
+@media print {
+  .page .table-wrap {
+    overflow: visible;
+  }
+  .page table.data {
+    font-size: 9.5px;
+    width: auto;
+  }
+  .page table.data th,
+  .page table.data td {
+    padding: 2px 5px;
+  }
+  .page table.data thead th {
+    font-size: 8px;
+  }
+  .page table.data .small {
+    font-size: 0.85em;
+  }
+  details > summary {
+    display: none;
+  }
+}

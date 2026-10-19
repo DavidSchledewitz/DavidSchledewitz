@@ -1,0 +1,107 @@
+/* Categorical series colours (dataviz reference palette, validated for light and
+   dark surfaces). Slots are assigned in fixed order and follow the entity. */
+.viz-root {
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #6250d6;
+  --series-8: #e34948;
+  --viz-grid: #e1e0d9;
+  --viz-axis: #c3c2b7;
+  position: relative;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme='light'])) .viz-root {
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --series-6: #008300;
+    --series-7: #9085e9;
+    --series-8: #e66767;
+    --viz-grid: #2c2c2a;
+    --viz-axis: #383835;
+  }
+}
+:root[data-theme='dark'] .viz-root {
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+  --series-8: #e66767;
+  --viz-grid: #2c2c2a;
+  --viz-axis: #383835;
+}
+.viz-root svg {
+  display: block;
+  width: 100%;
+  overflow: visible;
+}
+.viz-root svg:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.viz-root .tick {
+  fill: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.viz-root .end-label {
+  fill: var(--text);
+  font-size: 11px;
+}
+.viz-tooltip {
+  position: absolute;
+  top: 0;
+  pointer-events: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: var(--shadow);
+  padding: 6px 10px;
+  font-size: 0.82rem;
+  min-width: 140px;
+  z-index: 2;
+}
+.viz-tooltip .tt-head {
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.viz-tooltip .tt-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.viz-tooltip .tt-row strong {
+  font-variant-numeric: tabular-nums;
+}
+.viz-tooltip .tt-row .muted {
+  color: var(--muted);
+}
+.viz-key {
+  display: inline-block;
+  width: 12px;
+  height: 2px;
+  border-radius: 1px;
+  flex: none;
+}
+.viz-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 0.85rem;
+  margin-bottom: 6px;
+}
+.viz-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
