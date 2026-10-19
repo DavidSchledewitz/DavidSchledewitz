@@ -28,7 +28,7 @@ Gio._promisify(Soup.Session.prototype, 'send_and_read_async');
 
 const API_URL = GLib.getenv('CLAUDE_USAGE_API_URL') ?? 'https://api.anthropic.com/api/oauth/usage';
 const OAUTH_BETA = 'oauth-2025-04-20';
-const INTERVAL = 60; // seconds between polls
+const INTERVAL = 120; // seconds between polls; the endpoint rate-limits eagerly
 const MAX_BACKOFF = 15 * 60;
 
 // GNOME palette: green 3, yellow 3, red 2
@@ -39,7 +39,12 @@ const COLORS = {
     none: [0.6, 0.6, 0.6],
 };
 
-class UsageError extends Error {}
+class UsageError extends Error {
+    constructor(message, retryAfter = 0) {
+        super(message);
+        this.retryAfter = retryAfter; // seconds the server asked us to wait
+    }
+}
 
 // ---------------------------------------------------------------------------
 // data
@@ -106,9 +111,12 @@ class UsageSource {
         } catch (e) {
             if (e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
                 return;
-            this.error = e instanceof UsageError ? e.message : `error: ${e.message}`;
             this._failures++;
-            this._schedule(Math.min(INTERVAL * 2 ** (this._failures - 1), MAX_BACKOFF));
+            const delay = Math.max(Math.min(INTERVAL * 2 ** (this._failures - 1), MAX_BACKOFF), e.retryAfter ?? 0);
+            this.error = e instanceof UsageError ? e.message : `error: ${e.message}`;
+            if (e.retryAfter !== undefined)
+                this.error += ` Retrying in ${U.fmtDuration(delay)}.`;
+            this._schedule(delay);
         } finally {
             this._busy = false;
         }
@@ -151,11 +159,14 @@ class UsageSource {
                 throw e;
             throw new UsageError(`Network error: ${e.message}`);
         }
-        const status = msg.get_status();
+        // Not get_status(): it throws for codes missing from Soup's enum, such as 429.
+        const status = msg.status_code;
         if (status === 401 || status === 403)
             throw new UsageError('Login expired. Open Claude Code once so it refreshes your login.');
-        if (status === 429)
-            throw new UsageError('Rate limited by the usage endpoint, backing off.');
+        if (status === 429) {
+            const retryAfter = parseInt(msg.get_response_headers().get_one('Retry-After') ?? '', 10);
+            throw new UsageError('Rate limited by the usage endpoint.', Number.isFinite(retryAfter) ? retryAfter : 0);
+        }
         if (status !== 200)
             throw new UsageError(`HTTP ${status} from usage endpoint`);
         try {

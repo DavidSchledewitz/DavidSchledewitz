@@ -58,6 +58,10 @@ EXPIRING = ("iguana_necktie",)
 class UsageError(Exception):
     """An error with a message meant for the user."""
 
+    def __init__(self, message: str, retry_after: float = 0):
+        super().__init__(message)
+        self.retry_after = retry_after  # seconds the server asked us to wait
+
 
 @dataclass
 class Credentials:
@@ -143,7 +147,11 @@ def fetch_usage(creds: Credentials, timeout: float = 15) -> dict:
             hint = "token expired or rejected. Open Claude Code once so it refreshes your login."
             raise UsageError(f"HTTP {exc.code}: {hint}") from exc
         if exc.code == 429:
-            raise UsageError("HTTP 429: rate limited by the usage endpoint, backing off.") from exc
+            try:
+                retry_after = float(exc.headers.get("Retry-After") or 0)
+            except ValueError:
+                retry_after = 0
+            raise UsageError("HTTP 429: rate limited by the usage endpoint.", retry_after) from exc
         raise UsageError(f"HTTP {exc.code} from usage endpoint") from exc
     except urllib.error.URLError as exc:
         raise UsageError(f"network error: {exc.reason}") from exc
@@ -493,9 +501,11 @@ class State:
             write_cache(self.data, self.fetched_at)
             self.next_fetch = time.time() + interval
         except UsageError as exc:
-            self.error = str(exc)
             self.failures += 1
-            backoff = min(interval * 2 ** (self.failures - 1), 15 * 60)
+            backoff = max(min(interval * 2 ** (self.failures - 1), 15 * 60), exc.retry_after)
+            self.error = str(exc)
+            if exc.retry_after:
+                self.error += f" Retrying in {fmt_duration(backoff)}."
             self.next_fetch = time.time() + backoff
 
 
@@ -585,10 +595,10 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--once", action="store_true", help="print the dashboard once and exit")
     mode.add_argument("--line", action="store_true", help="print one compact line (for tmux/status bars)")
     mode.add_argument("--json", action="store_true", help="print the raw API response")
-    p.add_argument("-i", "--interval", type=float, default=60,
-                   help="seconds between API polls in live mode (default 60, min 15)")
-    p.add_argument("--cache-ttl", type=float, default=60,
-                   help="--line reuses data younger than this many seconds (default 60)")
+    p.add_argument("-i", "--interval", type=float, default=120,
+                   help="seconds between API polls in live mode (default 120, min 15)")
+    p.add_argument("--cache-ttl", type=float, default=120,
+                   help="--line reuses data younger than this many seconds (default 120)")
     p.add_argument("--no-color", action="store_true", help="disable colors (also: NO_COLOR env var)")
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     args = p.parse_args(argv)

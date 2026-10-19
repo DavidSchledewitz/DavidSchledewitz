@@ -180,6 +180,13 @@ class EndToEndTests(unittest.TestCase):
             with mock.patch("builtins.print"):
                 self.assertEqual(cu.main(["--line"]), 0)
 
+    def test_retry_after_is_respected(self):
+        state = cu.State()
+        with mock.patch.object(cu, "fetch_usage", side_effect=cu.UsageError("HTTP 429: slow down.", 900)):
+            state.refresh(120)
+        self.assertGreater(state.next_fetch, cu.time.time() + 890)
+        self.assertIn("Retrying in 15m", state.error)
+
     def test_state_backoff_on_error(self):
         state = cu.State()
         with mock.patch.object(cu, "fetch_usage", side_effect=cu.UsageError("boom")):
