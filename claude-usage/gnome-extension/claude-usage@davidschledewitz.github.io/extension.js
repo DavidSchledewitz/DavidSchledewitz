@@ -1,5 +1,9 @@
 // Claude usage: top-bar indicator for your Claude plan limits.
 //
+// An expired login is renewed the way Claude Code renews it and written back
+// to Claude Code's credentials file, so a browser login is rarely needed.
+// Creating ~/.config/claude-usage/no-auto-renew turns that off.
+//
 // Panel: two mini bars (5h session on top, week below) plus "62% · 51%".
 // Click: a popup with each limit, its reset countdown, day ticks on weekly
 // limits and an over/under-pace note. Data comes from the same endpoint as
@@ -26,8 +30,18 @@ Gio._promisify(Gio.File.prototype, 'load_contents_async');
 Gio._promisify(Gio.File.prototype, 'replace_contents_bytes_async', 'replace_contents_finish');
 Gio._promisify(Soup.Session.prototype, 'send_and_read_async');
 
+function expired(creds) {
+    return creds.expiresAt !== null && Date.now() / 1000 >= creds.expiresAt / 1000 - RENEW_MARGIN;
+}
+
 const API_URL = GLib.getenv('CLAUDE_USAGE_API_URL') ?? 'https://api.anthropic.com/api/oauth/usage';
 const OAUTH_BETA = 'oauth-2025-04-20';
+const TOKEN_URL = GLib.getenv('CLAUDE_USAGE_TOKEN_URL') ?? 'https://platform.claude.com/v1/oauth/token';
+// Claude Code's OAuth client. Renewing exactly as Claude Code does keeps the
+// renewed login valid for Claude Code as well.
+const CLAUDE_CODE_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
+const RENEW_MARGIN = 60; // renew this many seconds before the login expires
+const LOCK_STALE = 60; // seconds after which a leftover renew lock is ignored
 const INTERVAL = 300; // seconds between polls; the endpoint rate-limits eagerly
 const MAX_BACKOFF = 30 * 60;
 
@@ -40,10 +54,11 @@ const COLORS = {
 };
 
 class UsageError extends Error {
-    constructor(message, {retryAfter = 0, loginNeeded = false} = {}) {
+    constructor(message, {retryAfter = 0, loginNeeded = false, rejected = false} = {}) {
         super(message);
         this.retryAfter = retryAfter; // seconds the server asked us to wait
         this.loginNeeded = loginNeeded; // only a new (browser) login helps
+        this.rejected = rejected; // the usage endpoint refused the login (401/403)
     }
 }
 
@@ -178,7 +193,7 @@ class UsageSource {
             if (cached) {
                 [this.data, this.fetchedAt] = cached;
             } else {
-                this.data = await this._fetch(creds.token);
+                this.data = await this._fetchRenewing(creds);
                 this.fetchedAt = Date.now() / 1000;
                 await this._writeCache();
             }
@@ -205,7 +220,7 @@ class UsageSource {
     async _loadCredentials() {
         const envToken = GLib.getenv('CLAUDE_CODE_OAUTH_TOKEN');
         if (envToken)
-            return {token: envToken, plan: null};
+            return {token: envToken, plan: null, refreshToken: null, scopes: [], expiresAt: null, file: null};
         const dir = GLib.getenv('CLAUDE_CONFIG_DIR') ?? GLib.build_filenamev([GLib.get_home_dir(), '.claude']);
         const file = Gio.File.new_for_path(GLib.build_filenamev([dir, '.credentials.json']));
         let blob;
@@ -220,7 +235,128 @@ class UsageSource {
         const oauth = blob?.claudeAiOauth ?? {};
         if (!oauth.accessToken)
             throw new UsageError(NO_LOGIN, {loginNeeded: true});
-        return {token: oauth.accessToken, plan: oauth.subscriptionType ?? null};
+        return {
+            token: oauth.accessToken,
+            plan: oauth.subscriptionType ?? null,
+            refreshToken: oauth.refreshToken || null,
+            scopes: Array.isArray(oauth.scopes) ? oauth.scopes : [],
+            expiresAt: typeof oauth.expiresAt === 'number' ? oauth.expiresAt : null, // ms
+            file,
+        };
+    }
+
+    /** Fetch usage, renewing the login first if it expired, and once more if
+     * Claude rejects it anyway. */
+    async _fetchRenewing(creds) {
+        creds = await this._renew(creds, false);
+        try {
+            return await this._fetch(creds.token);
+        } catch (e) {
+            if (!e.rejected)
+                throw e;
+            const renewed = await this._renew(creds, true);
+            if (renewed.token === creds.token)
+                throw e;
+            return this._fetch(renewed.token);
+        }
+    }
+
+    _renewalDisabled() {
+        return GLib.file_test(GLib.build_filenamev([GLib.get_user_config_dir(), 'claude-usage', 'no-auto-renew']),
+            GLib.FileTest.EXISTS);
+    }
+
+    /** Only one program (top bar or terminal app) renews at a time, since each
+     * renewal replaces the refresh token. Returns the lock file, or null. */
+    _takeLock() {
+        const lock = Gio.File.new_for_path(GLib.build_filenamev([GLib.get_user_cache_dir(), 'claude-usage', 'renew.lock']));
+        GLib.mkdir_with_parents(lock.get_parent().get_path(), 0o755);
+        for (let attempt = 0; attempt < 2; attempt++) {
+            try {
+                lock.create(Gio.FileCreateFlags.PRIVATE, null).close(null);
+                return lock;
+            } catch (e) {
+                if (!e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.EXISTS))
+                    return null;
+            }
+            try {
+                const info = lock.query_info('time::modified', Gio.FileQueryInfoFlags.NONE, null);
+                if (Date.now() / 1000 - info.get_modification_date_time().to_unix() <= LOCK_STALE)
+                    return null; // the other program is renewing right now
+                lock.delete(null); // left behind by a crash
+            } catch {
+                // vanished meanwhile: just try again
+            }
+        }
+        return null;
+    }
+
+    /** Renew an expired login with its refresh token, as Claude Code does.
+     * With force, renew although it hasn't expired (Claude rejected it). */
+    async _renew(creds, force) {
+        if (!creds.file || !creds.refreshToken || this._renewalDisabled())
+            return creds;
+        if (!force && !expired(creds))
+            return creds;
+        const lock = this._takeLock();
+        if (!lock)
+            return creds;
+        try {
+            const current = await this._loadCredentials();
+            if (current.token !== creds.token || (!force && !expired(current)))
+                return current; // renewed meanwhile, by Claude Code or the terminal app
+            const body = {grant_type: 'refresh_token', refresh_token: current.refreshToken, client_id: CLAUDE_CODE_CLIENT_ID};
+            if (current.scopes.length)
+                body.scope = current.scopes.join(' ');
+            const msg = Soup.Message.new('POST', TOKEN_URL);
+            msg.get_request_headers().append('User-Agent', 'claude-usage-gnome/1');
+            msg.set_request_body_from_bytes('application/json', new GLib.Bytes(new TextEncoder().encode(JSON.stringify(body))));
+            let bytes;
+            try {
+                bytes = await this._session.send_and_read_async(msg, GLib.PRIORITY_DEFAULT, this._cancellable);
+            } catch (e) {
+                if (e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
+                    throw e;
+                throw new UsageError(`Network error while renewing the login: ${e.message}`);
+            }
+            const status = msg.status_code;
+            if (status === 400 || status === 401 || status === 403)
+                throw new UsageError('Your Claude login has expired.', {loginNeeded: true});
+            if (status !== 200)
+                throw new UsageError(`HTTP ${status} while renewing the login`);
+            let reply;
+            try {
+                reply = JSON.parse(new TextDecoder().decode(bytes.get_data()));
+            } catch {
+                throw new UsageError('Renewing the login returned invalid JSON');
+            }
+            if (!reply?.access_token)
+                throw new UsageError('Renewing the login returned no token');
+            await this._saveRenewed(current.file, reply);
+            return await this._loadCredentials();
+        } finally {
+            try {
+                lock.delete(null);
+            } catch {}
+        }
+    }
+
+    /** Store a renewed login the way Claude Code does, keeping every other
+     * field. Gio writes a private temp file and renames it into place, so
+     * Claude Code never reads a half-written file. */
+    async _saveRenewed(file, reply) {
+        const [contents] = await file.load_contents_async(this._cancellable);
+        const blob = JSON.parse(new TextDecoder().decode(contents));
+        const oauth = blob.claudeAiOauth ??= {};
+        oauth.accessToken = reply.access_token;
+        if (reply.refresh_token)
+            oauth.refreshToken = reply.refresh_token;
+        if (typeof reply.expires_in === 'number')
+            oauth.expiresAt = Math.floor(Date.now() + reply.expires_in * 1000);
+        if (typeof reply.scope === 'string' && reply.scope.trim())
+            oauth.scopes = reply.scope.trim().split(/\s+/);
+        await file.replace_contents_bytes_async(new GLib.Bytes(new TextEncoder().encode(JSON.stringify(blob))),
+            null, false, Gio.FileCreateFlags.REPLACE_DESTINATION | Gio.FileCreateFlags.PRIVATE, this._cancellable);
     }
 
     async _fetch(token) {
@@ -241,7 +377,7 @@ class UsageSource {
         // Not get_status(): it throws for codes missing from Soup's enum, such as 429.
         const status = msg.status_code;
         if (status === 401 || status === 403)
-            throw new UsageError('Your Claude login has expired.', {loginNeeded: true});
+            throw new UsageError('Your Claude login has expired.', {loginNeeded: true, rejected: true});
         if (status === 429) {
             const retryAfter = parseInt(msg.get_response_headers().get_one('Retry-After') ?? '', 10);
             throw new UsageError('Rate limited by the usage endpoint.', {retryAfter: Number.isFinite(retryAfter) ? retryAfter : 0});

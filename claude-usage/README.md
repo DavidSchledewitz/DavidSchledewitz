@@ -52,7 +52,7 @@ top bar, run `install_claude_bar.sh` again and log out and back in.
 and `rm ~/.local/bin/claude-usage`.
 
 **Something looks wrong?**
-- *Login expired*: click **Log in to Claude…** in the top-bar popup, or press
+- *Login expired*: normally renewed automatically. If that fails, click **Log in to Claude…** in the top-bar popup, or press
   `l` in the terminal view, or run `claude-usage --login`. Each of these runs
   Claude Code's own login: your browser opens, you confirm, and you're done.
 - *Retrying in…*: the usage server is rate-limiting. It retries by itself.
@@ -114,6 +114,7 @@ How to read it:
 | `-i 600`, `--interval 600` | Seconds between polls in live mode (default 300, minimum 60). |
 | `--cache-ttl 600` | How old cached data `--line` may reuse (default 300 s). |
 | `--no-color` / `NO_COLOR=1` | Plain output. |
+| `--no-renew` | Don't renew an expired login (see [How it works](#how-it-works)). |
 | `--version`, `-h` | Version, help. |
 
 Environment variables: `CLAUDE_CONFIG_DIR` (where Claude Code's login lives,
@@ -201,10 +202,19 @@ Things to know:
   The parser is generic, so a new limit type (anything with a `utilization`
   field) shows up automatically. If the format changes completely, run
   `claude-usage --json` to see what came back.
-- **The tool doesn't renew your login itself.** Claude Code renews it whenever
-  you use Claude Code. When it has expired, the popup shows **Log in to
-  Claude…**: that runs Claude Code's own `claude auth login`, which opens your
-  browser. Afterwards the tool picks up the new login right away.
+- **It renews an expired login by itself.** Claude Code's login lasts only
+  some hours, and Claude Code renews it whenever you use it. If you haven't,
+  claude-usage renews it the same way Claude Code does (same login server,
+  same request) and writes the fresh login back into
+  `~/.claude/.credentials.json`, so Claude Code keeps working with it too. It
+  only does this once the login has expired or been rejected, keeps every
+  other field in that file, writes it in one step, and uses a lock so the top
+  bar and the terminal app never renew at the same time. The small risk: if
+  Claude Code renews in the very same moment, it may need one `/login`. If
+  renewing fails for good, you get the **Log in to Claude…** button instead.
+  This relies on how Claude Code logs in today, which Anthropic can change.
+  To turn it off, create `~/.config/claude-usage/no-auto-renew` (both apps),
+  or pass `--no-renew` to the terminal app.
 - It works with subscription (Pro/Max) logins only. API-key usage has no
   5h/weekly limits.
 

@@ -167,6 +167,23 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    renewals = []  # bodies POSTed to the fake token endpoint
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        _Handler.renewals.append(body)
+        if body.get("refresh_token") != "rt-1" or body.get("client_id") != cu.CLAUDE_CODE_CLIENT_ID:
+            self.send_response(400)
+            self.end_headers()
+            self.wfile.write(b'{"error": "invalid_grant"}')
+            return
+        reply = {"access_token": "good-token", "refresh_token": "rt-2", "expires_in": 28800,
+                 "scope": "user:inference user:profile"}
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps(reply).encode())
+
     def log_message(self, *args):
         pass
 
@@ -177,6 +194,7 @@ class EndToEndTests(unittest.TestCase):
         cls.server = HTTPServer(("127.0.0.1", 0), _Handler)
         threading.Thread(target=cls.server.serve_forever, daemon=True).start()
         cls.url = f"http://127.0.0.1:{cls.server.server_port}/api/oauth/usage"
+        cls.token_url = f"http://127.0.0.1:{cls.server.server_port}/v1/oauth/token"
 
     @classmethod
     def tearDownClass(cls):
@@ -195,8 +213,22 @@ class EndToEndTests(unittest.TestCase):
         os.environ.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
         self.url_patch = mock.patch.object(cu, "API_URL", self.url)
         self.url_patch.start()
+        self.token_patch = mock.patch.object(cu, "TOKEN_URL", self.token_url)
+        self.token_patch.start()
+        self.creds_path = cfg / ".credentials.json"
+        _Handler.renewals = []
+
+    def write_login(self, token, refresh="rt-1", expires_in_s=3600):
+        expires = int((time.time() + expires_in_s) * 1000)
+        self.creds_path.write_text(json.dumps({
+            "claudeAiOauth": {"accessToken": token, "refreshToken": refresh, "expiresAt": expires,
+                              "scopes": ["user:inference", "user:profile"], "subscriptionType": "pro",
+                              "rateLimitTier": "default_claude_ai"},
+            "mcpOAuth": {"some-server": {"accessToken": "keep-me"}}}))
+        self.creds_path.chmod(0o600)
 
     def tearDown(self):
+        self.token_patch.stop()
         self.url_patch.stop()
         self.env.stop()
         self.tmp.cleanup()
@@ -236,6 +268,76 @@ class EndToEndTests(unittest.TestCase):
                 state.refresh(300)
                 delays.append(round(state.next_fetch - cu.time.time()))
         self.assertEqual(delays, [300, 600, 1200, 1800, 1800])
+
+    def test_expired_login_is_renewed_and_saved(self):
+        self.write_login("old-token", expires_in_s=-3600)
+        with mock.patch("builtins.print") as p:
+            self.assertEqual(cu.main(["--line"]), 0)
+        self.assertTrue(p.call_args[0][0].startswith("5h 40%"))
+        self.assertEqual(len(_Handler.renewals), 1)
+        self.assertEqual(_Handler.renewals[0]["grant_type"], "refresh_token")
+        self.assertEqual(_Handler.renewals[0]["scope"], "user:inference user:profile")
+        blob = json.loads(self.creds_path.read_text())
+        oauth = blob["claudeAiOauth"]
+        self.assertEqual((oauth["accessToken"], oauth["refreshToken"]), ("good-token", "rt-2"))
+        self.assertGreater(oauth["expiresAt"] / 1000, time.time() + 28000)
+        self.assertEqual(oauth["rateLimitTier"], "default_claude_ai")      # other fields kept
+        self.assertEqual(blob["mcpOAuth"]["some-server"]["accessToken"], "keep-me")
+        self.assertEqual(self.creds_path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(list(self.creds_path.parent.glob("*.tmp")), [])
+
+    def test_valid_login_is_not_renewed(self):
+        self.write_login("good-token")
+        with mock.patch("builtins.print"):
+            self.assertEqual(cu.main(["--json"]), 0)
+        self.assertEqual(_Handler.renewals, [])
+
+    def test_rejected_login_is_renewed_and_retried(self):
+        self.write_login("revoked-token")  # not expired, but the server says 401
+        state = cu.State()
+        state.refresh(300)
+        self.assertIsNone(state.error)
+        self.assertEqual(len(_Handler.renewals), 1)
+        self.assertEqual(json.loads(self.creds_path.read_text())["claudeAiOauth"]["accessToken"], "good-token")
+
+    def test_dead_refresh_token_asks_for_login_and_keeps_file(self):
+        self.write_login("old-token", refresh="rt-dead", expires_in_s=-60)
+        before = self.creds_path.read_text()
+        state = cu.State()
+        state.refresh(300)
+        self.assertTrue(state.login_needed)
+        self.assertIn("login has expired", state.error)
+        self.assertEqual(self.creds_path.read_text(), before)
+
+    def test_no_auto_renew_file_disables_renewal(self):
+        self.write_login("old-token", expires_in_s=-60)
+        cfg = Path(self.tmp.name) / "xdgconfig" / "claude-usage"
+        cfg.mkdir(parents=True)
+        (cfg / "no-auto-renew").touch()
+        with mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(cfg.parent)}):
+            state = cu.State()
+            state.refresh(300)
+        self.assertEqual(_Handler.renewals, [])
+        self.assertTrue(state.login_needed)
+
+    def test_no_renew_flag(self):
+        self.write_login("old-token", expires_in_s=-60)
+        with mock.patch("sys.stderr"), mock.patch.dict(os.environ):
+            self.assertEqual(cu.main(["--json", "--no-renew"]), 1)
+        self.assertEqual(_Handler.renewals, [])
+
+    def test_lock_held_by_other_program_skips_renewal(self):
+        self.write_login("old-token", expires_in_s=-60)
+        lock = cu.cache_path().with_name("renew.lock")
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        lock.touch()
+        creds = cu.load_credentials()
+        self.assertIs(cu.renew(creds), creds)
+        self.assertEqual(_Handler.renewals, [])
+        old = time.time() - 120
+        os.utime(lock, (old, old))  # a stale lock from a crash is taken over
+        self.assertEqual(cu.renew(cu.load_credentials()).token, "good-token")
+        self.assertFalse(lock.exists())
 
     def test_rejected_login_asks_for_login(self):
         state = cu.State()
