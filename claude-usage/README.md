@@ -52,7 +52,9 @@ top bar, run `install_claude_bar.sh` again and log out and back in.
 and `rm ~/.local/bin/claude-usage`.
 
 **Something looks wrong?**
-- *Login expired*: run `claude` once.
+- *Login expired*: click **Log in to Claude…** in the top-bar popup, or press
+  `l` in the terminal view, or run `claude-usage --login`. Each of these runs
+  Claude Code's own login: your browser opens, you confirm, and you're done.
 - *Retrying in…*: the usage server is rate-limiting. It retries by itself.
 - Anything else: send a screenshot and the output of `gnome-shell --version`.
 
@@ -107,6 +109,7 @@ How to read it:
 | `claude-usage --once` | Prints the dashboard once (add `-c` for the small one). |
 | `claude-usage --line` | Prints one line, e.g. `5h 62% (1h47m) · wk 34% (4d5h)` |
 | `claude-usage --json` | Prints the raw API response. |
+| `claude-usage --login` | Logs in again with Claude Code's own login (`claude auth login`), which opens your browser. In the live view, `l` does the same when the login has expired. |
 | `--zoom 0.7` | Font scale for `--window` (1.0 = normal). |
 | `-i 600`, `--interval 600` | Seconds between polls in live mode (default 300, minimum 60). |
 | `--cache-ttl 600` | How old cached data `--line` may reuse (default 300 s). |
@@ -198,12 +201,10 @@ Things to know:
   The parser is generic, so a new limit type (anything with a `utilization`
   field) shows up automatically. If the format changes completely, run
   `claude-usage --json` to see what came back.
-- **The tool never refreshes your token.** Access tokens expire after a few
-  hours, and Claude Code refreshes them whenever you use it. If you see
-  `HTTP 401`, open Claude Code once. The tool re-reads the credentials on
-  every poll, so it recovers on its own after that. (This is deliberate:
-  refreshing the token itself would rotate the refresh token and could log
-  Claude Code out.)
+- **The tool doesn't renew your login itself.** Claude Code renews it whenever
+  you use Claude Code. When it has expired, the popup shows **Log in to
+  Claude…**: that runs Claude Code's own `claude auth login`, which opens your
+  browser. Afterwards the tool picks up the new login right away.
 - It works with subscription (Pro/Max) logins only. API-key usage has no
   5h/weekly limits.
 

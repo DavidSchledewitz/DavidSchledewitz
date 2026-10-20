@@ -13,6 +13,7 @@ Modes:
     claude-usage --once     print the dashboard once and exit
     claude-usage --line     one compact line, for tmux / status bars
     claude-usage --json     raw JSON from the API
+    claude-usage --login    log in again via Claude Code (opens your browser)
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ __version__ = "0.1.0"
 
 API_URL = os.environ.get("CLAUDE_USAGE_API_URL", "https://api.anthropic.com/api/oauth/usage")
 OAUTH_BETA = "oauth-2025-04-20"
+LOGIN_HINT = "Log in again with `claude-usage --login`; it opens your browser."
 
 HOUR = 3600
 DAY = 24 * HOUR
@@ -64,6 +66,10 @@ class UsageError(Exception):
     def __init__(self, message: str, retry_after: float = 0):
         super().__init__(message)
         self.retry_after = retry_after  # seconds the server asked us to wait
+
+
+class LoginNeeded(UsageError):
+    """No usable login: the user has to log in again (in the browser)."""
 
 
 @dataclass
@@ -121,11 +127,27 @@ def load_credentials() -> Credentials:
         except (OSError, ValueError, subprocess.TimeoutExpired):
             pass
 
-    raise UsageError(
+    raise LoginNeeded(
         "no Claude Code login found. The Claude desktop app's login can't be "
-        "read by other programs, so install Claude Code and log in once "
-        "(`claude`, then /login with your Pro/Max account), or set CLAUDE_CODE_OAUTH_TOKEN."
+        "read by other programs. Install Claude Code, then run `claude-usage --login` "
+        "(it opens your browser), or set CLAUDE_CODE_OAUTH_TOKEN."
     )
+
+
+def find_claude() -> str | None:
+    """Claude Code's command, also where the native installer puts it when
+    ~/.local/bin isn't on PATH (e.g. for programs started by the desktop)."""
+    found = shutil.which("claude")
+    if found:
+        return found
+    for candidate in (Path.home() / ".local/bin/claude", Path.home() / ".claude/local/claude"):
+        if os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
+
+
+NO_CLAUDE = "Claude Code isn't installed. Install it with: curl -fsSL https://claude.ai/install.sh | bash"
+LOGIN_CMD = ("auth", "login", "--claudeai")  # Claude Code's own browser login
 
 
 # --------------------------------------------------------------------------
@@ -147,8 +169,7 @@ def fetch_usage(creds: Credentials, timeout: float = 15) -> dict:
             return json.load(resp)
     except urllib.error.HTTPError as exc:
         if exc.code in (401, 403):
-            hint = "token expired or rejected. Open Claude Code once so it refreshes your login."
-            raise UsageError(f"HTTP {exc.code}: {hint}") from exc
+            raise LoginNeeded(f"HTTP {exc.code}: your Claude login has expired. {LOGIN_HINT}") from exc
         if exc.code == 429:
             try:
                 retry_after = float(exc.headers.get("Retry-After") or 0)
@@ -393,7 +414,12 @@ def render(state: "State", now: datetime, width: int, st: Style, live: bool) -> 
     lines.append("")
 
     if state.data is None:
+        if state.login_proc is not None:
+            lines.append(st(" Waiting for you to log in in the browser…", "36"))
+            return lines
         lines.append(st(f" {state.error or 'loading…'}", "31" if state.error else "90"))
+        if state.login_needed and live:
+            lines.append(st(" Press l to log in (opens your browser).", "36"))
         return lines
 
     for limit in parse_limits(state.data):
@@ -441,8 +467,12 @@ def render(state: "State", now: datetime, width: int, st: Style, live: bool) -> 
         footer.append(f"next in {fmt_duration(max(0, state.next_fetch - time.time()))}")
         footer.append("[r] refresh  [q] quit")
     lines.append(st(" " + " · ".join(footer), "90"))
-    if state.error:
+    if state.login_proc is not None:
+        lines.append(st(" Waiting for you to log in in the browser…", "36"))
+    elif state.error:
         lines.append(st(f" ! {state.error}", "33"))
+        if state.login_needed and live:
+            lines.append(st(" Press l to log in (opens your browser).", "36"))
     return lines
 
 
@@ -502,7 +532,11 @@ def render_compact(state: "State", now: datetime, st: Style, live: bool) -> list
     elif not state.error:
         lines.append(st(" loading…", "90"))
 
-    if state.error:
+    if state.login_proc is not None:
+        lines.append(st(" Waiting for the browser login…", "36"))
+    elif state.login_needed and live:
+        lines.append(st(" Login expired. Press l to log in.", "33"))
+    elif state.error:
         for part in textwrap.wrap(state.error, COMPACT_WIDTH - 3)[:2]:
             lines.append(st(f" ! {part}", "33" if state.data is not None else "31"))
     return lines
@@ -546,6 +580,39 @@ class State:
     error: str | None = None
     plan: str | None = None
     failures: int = 0
+    login_needed: bool = False
+    login_proc: subprocess.Popen | None = None
+    login_started: float = 0.0
+
+    def start_login(self) -> None:
+        """Run Claude Code's browser login in the background (live mode)."""
+        if self.login_proc is not None:
+            return
+        claude = find_claude()
+        if claude is None:
+            self.error = NO_CLAUDE
+            return
+        self.login_proc = subprocess.Popen(
+            [claude, *LOGIN_CMD], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, start_new_session=True)
+        self.login_started = time.time()
+
+    def check_login(self) -> None:
+        """Called every tick: refresh as soon as the browser login finished."""
+        if self.login_proc is None:
+            return
+        code = self.login_proc.poll()
+        if code is None and time.time() - self.login_started > 10 * 60:
+            self.login_proc.kill()
+            code = -1
+        if code is None:
+            return
+        self.login_proc = None
+        if code == 0:
+            self.failures = 0
+            self.next_fetch = 0
+        else:
+            self.error = "The login didn't complete. Press l to try again."
 
     def refresh(self, interval: float) -> None:
         try:
@@ -555,9 +622,11 @@ class State:
             self.fetched_at = time.time()
             self.error = None
             self.failures = 0
+            self.login_needed = False
             write_cache(self.data, self.fetched_at)
             self.next_fetch = time.time() + interval
         except UsageError as exc:
+            self.login_needed = isinstance(exc, LoginNeeded)
             self.failures += 1
             backoff = max(min(interval * 2 ** (self.failures - 1), 30 * 60), exc.retry_after)
             self.error = str(exc)
@@ -628,7 +697,8 @@ def run_live(interval: float, st: Style, compact: bool = False) -> None:
         state.next_fetch = state.fetched_at + interval
     with Terminal() as term:
         while True:
-            if time.time() >= state.next_fetch:
+            state.check_login()
+            if time.time() >= state.next_fetch and state.login_proc is None:
                 state.refresh(interval)
             cols = shutil.get_terminal_size((80, 24)).columns
             now = datetime.now(timezone.utc)
@@ -641,6 +711,8 @@ def run_live(interval: float, st: Style, compact: bool = False) -> None:
                 return
             if key in ("r", "R"):
                 state.next_fetch = 0
+            if key in ("l", "L") and state.login_needed:
+                state.start_login()
 
 
 # --------------------------------------------------------------------------
@@ -684,6 +756,8 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--once", action="store_true", help="print the dashboard once and exit")
     mode.add_argument("--line", action="store_true", help="print one compact line (for tmux/status bars)")
     mode.add_argument("--json", action="store_true", help="print the raw API response")
+    mode.add_argument("--login", action="store_true",
+                      help="log in again via Claude Code; opens your browser")
     mode.add_argument("-w", "--window", action="store_true",
                       help="open the compact dashboard in its own small GNOME Terminal window")
     p.add_argument("-c", "--compact", action="store_true",
@@ -701,6 +775,13 @@ def main(argv: list[str] | None = None) -> int:
     color = not args.no_color and "NO_COLOR" not in os.environ
     interval = max(60.0, args.interval)
     live = not (args.once or args.line or args.json or args.window)
+
+    if args.login:
+        claude = find_claude()
+        if claude is None:
+            print(f"claude-usage: {NO_CLAUDE}", file=sys.stderr)
+            return 1
+        return subprocess.call([claude, *LOGIN_CMD])
 
     if args.window:
         passthrough = [f"--interval={interval:g}"] + (["--no-color"] if args.no_color else [])

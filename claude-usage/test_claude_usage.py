@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 import threading
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -235,6 +236,41 @@ class EndToEndTests(unittest.TestCase):
                 state.refresh(300)
                 delays.append(round(state.next_fetch - cu.time.time()))
         self.assertEqual(delays, [300, 600, 1200, 1800, 1800])
+
+    def test_rejected_login_asks_for_login(self):
+        state = cu.State()
+        with mock.patch.object(cu, "API_URL", self.url):
+            os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = "nope"
+            try:
+                state.refresh(300)
+            finally:
+                del os.environ["CLAUDE_CODE_OAUTH_TOKEN"]
+        self.assertTrue(state.login_needed)
+        text = "\n".join(cu.render(state, NOW, 80, cu.Style(False), live=True))
+        self.assertIn("Press l to log in", text)
+
+    def test_login_flag_runs_claude_code_login(self):
+        with mock.patch.object(cu, "find_claude", return_value="/opt/claude"), \
+                mock.patch.object(cu.subprocess, "call", return_value=0) as call:
+            self.assertEqual(cu.main(["--login"]), 0)
+        call.assert_called_once_with(["/opt/claude", "auth", "login", "--claudeai"])
+
+    def test_login_flag_without_claude_code(self):
+        with mock.patch.object(cu, "find_claude", return_value=None), mock.patch("sys.stderr"):
+            self.assertEqual(cu.main(["--login"]), 1)
+
+    def test_background_login_triggers_refresh(self):
+        fake = Path(self.tmp.name) / "fake-claude"
+        fake.write_text("#!/bin/sh\n[ \"$1 $2\" = \"auth login\" ] && exit 0\nexit 3\n")
+        fake.chmod(0o755)
+        state = cu.State(login_needed=True, next_fetch=time.time() + 999)
+        with mock.patch.object(cu, "find_claude", return_value=str(fake)):
+            state.start_login()
+        self.assertIsNotNone(state.login_proc)
+        state.login_proc.wait(5)
+        state.check_login()
+        self.assertIsNone(state.login_proc)
+        self.assertEqual(state.next_fetch, 0)
 
     def test_state_backoff_on_error(self):
         state = cu.State()

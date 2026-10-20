@@ -40,10 +40,27 @@ const COLORS = {
 };
 
 class UsageError extends Error {
-    constructor(message, retryAfter = 0) {
+    constructor(message, {retryAfter = 0, loginNeeded = false} = {}) {
         super(message);
         this.retryAfter = retryAfter; // seconds the server asked us to wait
+        this.loginNeeded = loginNeeded; // only a new (browser) login helps
     }
+}
+
+const NO_LOGIN = 'No Claude Code login found. The desktop app\'s login can\'t be read by other programs.';
+const LOGIN_TIMEOUT = 10 * 60; // seconds to wait for the browser login
+
+/** Claude Code's command. The desktop session's PATH may lack ~/.local/bin. */
+function findClaude() {
+    const found = GLib.find_program_in_path('claude');
+    if (found)
+        return found;
+    const home = GLib.get_home_dir();
+    for (const path of [`${home}/.local/bin/claude`, `${home}/.claude/local/claude`]) {
+        if (GLib.file_test(path, GLib.FileTest.IS_EXECUTABLE))
+            return path;
+    }
+    return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -61,6 +78,10 @@ class UsageSource {
         this.fetchedAt = null;
         this.error = null;
         this.plan = null;
+        this.loginNeeded = false;
+        this.loggingIn = false;
+        this._loginProc = null;
+        this._loginTimer = 0;
     }
 
     start() {
@@ -71,11 +92,67 @@ class UsageSource {
         this._poll(true);
     }
 
+    /** Run Claude Code's own browser login, then refresh. */
+    login() {
+        if (this._loginProc)
+            return;
+        const claude = findClaude();
+        if (!claude) {
+            this.error = 'Claude Code isn\'t installed. See the claude-usage README for the one-line install.';
+            this._onChange?.();
+            return;
+        }
+        try {
+            // stdin stays an open pipe: Claude Code offers a paste-the-code
+            // fallback there, but the browser redirect normally finishes it.
+            this._loginProc = Gio.Subprocess.new([claude, 'auth', 'login', '--claudeai'],
+                Gio.SubprocessFlags.STDIN_PIPE | Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_SILENCE);
+        } catch (e) {
+            this.error = `Couldn't start the login: ${e.message}`;
+            this._onChange?.();
+            return;
+        }
+        this.loggingIn = true;
+        this._onChange?.();
+        const proc = this._loginProc;
+        this._loginTimer = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, LOGIN_TIMEOUT, () => {
+            this._loginTimer = 0;
+            proc.force_exit();
+            return GLib.SOURCE_REMOVE;
+        });
+        proc.wait_check_async(this._cancellable, (p, res) => {
+            let ok = false;
+            try {
+                ok = p.wait_check_finish(res);
+            } catch (e) {
+                if (e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
+                    return;
+            }
+            if (this._loginTimer)
+                GLib.source_remove(this._loginTimer);
+            this._loginTimer = 0;
+            this._loginProc = null;
+            this.loggingIn = false;
+            if (ok) {
+                this._failures = 0;
+                this.refresh();
+            } else {
+                this.error = 'The login didn\'t complete. Try again with “Log in to Claude…”.';
+                this._onChange?.();
+            }
+        });
+    }
+
     destroy() {
         this._cancellable.cancel();
         if (this._timer)
             GLib.source_remove(this._timer);
         this._timer = 0;
+        if (this._loginTimer)
+            GLib.source_remove(this._loginTimer);
+        this._loginTimer = 0;
+        this._loginProc?.force_exit();
+        this._loginProc = null;
         this._session.abort();
         this._onChange = null;
     }
@@ -106,15 +183,17 @@ class UsageSource {
                 await this._writeCache();
             }
             this.error = null;
+            this.loginNeeded = false;
             this._failures = 0;
             this._schedule(this.fetchedAt + INTERVAL - Date.now() / 1000);
         } catch (e) {
             if (e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
                 return;
             this._failures++;
+            this.loginNeeded = Boolean(e.loginNeeded);
             const delay = Math.max(Math.min(INTERVAL * 2 ** (this._failures - 1), MAX_BACKOFF), e.retryAfter ?? 0);
             this.error = e instanceof UsageError ? e.message : `error: ${e.message}`;
-            if (e.retryAfter !== undefined)
+            if (e instanceof UsageError && !e.loginNeeded)
                 this.error += ` Retrying in ${U.fmtDuration(delay)}.`;
             this._schedule(delay);
         } finally {
@@ -136,11 +215,11 @@ class UsageSource {
         } catch (e) {
             if (e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
                 throw e;
-            throw new UsageError('No Claude Code login found. The desktop app\'s login can\'t be read; install Claude Code and log in once: run claude, then /login.');
+            throw new UsageError(NO_LOGIN, {loginNeeded: true});
         }
         const oauth = blob?.claudeAiOauth ?? {};
         if (!oauth.accessToken)
-            throw new UsageError('No Claude Code login found. The desktop app\'s login can\'t be read; install Claude Code and log in once: run claude, then /login.');
+            throw new UsageError(NO_LOGIN, {loginNeeded: true});
         return {token: oauth.accessToken, plan: oauth.subscriptionType ?? null};
     }
 
@@ -162,10 +241,10 @@ class UsageSource {
         // Not get_status(): it throws for codes missing from Soup's enum, such as 429.
         const status = msg.status_code;
         if (status === 401 || status === 403)
-            throw new UsageError('Login expired. Open Claude Code once so it refreshes your login.');
+            throw new UsageError('Your Claude login has expired.', {loginNeeded: true});
         if (status === 429) {
             const retryAfter = parseInt(msg.get_response_headers().get_one('Retry-After') ?? '', 10);
-            throw new UsageError('Rate limited by the usage endpoint.', Number.isFinite(retryAfter) ? retryAfter : 0);
+            throw new UsageError('Rate limited by the usage endpoint.', {retryAfter: Number.isFinite(retryAfter) ? retryAfter : 0});
         }
         if (status !== 200)
             throw new UsageError(`HTTP ${status} from usage endpoint`);
@@ -288,6 +367,10 @@ class ClaudeUsageIndicator extends PanelMenu.Button {
         this._content = vbox({style_class: 'claude-usage-popup', x_expand: true});
         this.menu.box.add_child(this._content);
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        this._loginItem = new PopupMenu.PopupMenuItem('Log in to Claude… (opens your browser)');
+        this._loginItem.connect('activate', () => this._source.login());
+        this._loginItem.visible = false;
+        this.menu.addMenuItem(this._loginItem);
         const refresh = new PopupMenu.PopupMenuItem('Refresh now');
         refresh.connect('activate', () => this._source.refresh());
         this.menu.addMenuItem(refresh);
@@ -380,8 +463,13 @@ class ClaudeUsageIndicator extends PanelMenu.Button {
                 {y_align: Clutter.ActorAlign.CENTER}));
         this._content.add_child(header);
 
+        this._loginItem.visible = src.loginNeeded && !src.loggingIn;
+
         if (!src.data) {
-            this._content.add_child(this._label(src.error ?? 'Loading…', src.error ? 'claude-usage-error' : 'claude-usage-dim'));
+            if (src.loggingIn)
+                this._content.add_child(this._label('Waiting for you to log in in the browser…', 'claude-usage-detail'));
+            else
+                this._content.add_child(this._label(src.error ?? 'Loading…', src.error ? 'claude-usage-error' : 'claude-usage-dim'));
             return;
         }
 
@@ -450,7 +538,9 @@ class ClaudeUsageIndicator extends PanelMenu.Button {
 
         this._footer = this._label('', 'claude-usage-dim');
         this._content.add_child(this._footer);
-        if (src.error)
+        if (src.loggingIn)
+            this._content.add_child(this._label('Waiting for you to log in in the browser…', 'claude-usage-detail'));
+        else if (src.error)
             this._content.add_child(this._label(src.error, 'claude-usage-error'));
         this._refreshTexts();
     }
