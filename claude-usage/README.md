@@ -52,9 +52,12 @@ top bar, run `install_claude_bar.sh` again and log out and back in.
 and `rm ~/.local/bin/claude-usage`.
 
 **Something looks wrong?**
-- *Login expired*: normally renewed automatically. If that fails, click **Log in to Claude…** in the top-bar popup, or press
-  `l` in the terminal view, or run `claude-usage --login`. Each of these runs
-  Claude Code's own login: your browser opens, you confirm, and you're done.
+- *Login expired*: it's normally renewed automatically. If that fails, the
+  top bar shows **⚠ log in** and a notification pops up. Click the
+  notification (or its **Log in** button, or **Log in to Claude…** in the
+  popup). In the terminal view, press `l`, or run `claude-usage --login`.
+  Each of these runs Claude Code's own login: your browser opens, you
+  confirm, and the numbers come back by themselves.
 - *Retrying in…*: the usage server is rate-limiting. It retries by itself.
 - Anything else: send a screenshot and the output of `gnome-shell --version`.
 

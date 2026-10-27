@@ -20,6 +20,7 @@ import Soup from 'gi://Soup?version=3.0';
 import St from 'gi://St';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as MessageTray from 'resource:///org/gnome/shell/ui/messageTray.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
@@ -525,7 +526,42 @@ class ClaudeUsageIndicator extends PanelMenu.Button {
         this._setTicking(false);
         this._source?.destroy();
         this._source = null;
+        this._notifSource?.destroy();
+        this._notifSource = null;
         super.destroy();
+    }
+
+    _login() {
+        if (this._source?.loginNeeded)
+            this._source.login();
+    }
+
+    /** One notification per expired login, with a button for the browser login. */
+    _notifyLogin() {
+        if (this._loginNotified)
+            return;
+        this._loginNotified = true;
+        if (!this._notifSource) {
+            this._notifSource = new MessageTray.Source({title: 'Claude usage', iconName: 'dialog-password-symbolic'});
+            this._notifSource.connect('destroy', () => {
+                this._notifSource = null;
+            });
+            Main.messageTray.add(this._notifSource);
+        }
+        const notification = new MessageTray.Notification({
+            source: this._notifSource,
+            title: 'Claude login expired',
+            body: 'Click to log in again (opens your browser).',
+            urgency: MessageTray.Urgency.HIGH,
+        });
+        notification.addAction('Log in', () => this._login());
+        notification.connect('activated', () => this._login());
+        notification.connect('destroy', () => {
+            if (this._loginNotification === notification)
+                this._loginNotification = null;
+        });
+        this._loginNotification = notification;
+        this._notifSource.addNotification(notification);
     }
 
     _setTicking(on) {
@@ -549,7 +585,20 @@ class ClaudeUsageIndicator extends PanelMenu.Button {
         const limits = this._limits();
         const pct = key => limits.find(l => l.key === key)?.pct;
         const show = p => (p === null || p === undefined ? '—' : `${p.toFixed(0)}%`);
-        this._panelLabel.text = this._source.data ? `${show(pct('five_hour'))} · ${show(pct('seven_day'))}` : '—';
+        const src = this._source;
+        if (src.loggingIn)
+            this._panelLabel.text = 'logging in…';
+        else if (src.loginNeeded)
+            this._panelLabel.text = '⚠ log in'; // the numbers would be stale
+        else
+            this._panelLabel.text = src.data ? `${show(pct('five_hour'))} · ${show(pct('seven_day'))}` : '—';
+
+        if (src.loginNeeded && !src.loggingIn) {
+            this._notifyLogin();
+        } else if (!src.loginNeeded) {
+            this._loginNotified = false;
+            this._loginNotification?.destroy();
+        }
         this._icon.queue_repaint();
         this._buildContent();
     }
@@ -559,7 +608,8 @@ class ClaudeUsageIndicator extends PanelMenu.Button {
         const [w, h] = area.get_surface_size();
         const fg = fgColor(area);
         const limits = this._limits();
-        const get = key => limits.find(l => l.key === key)?.pct ?? null;
+        const stale = this._source?.loginNeeded; // grey bars while the numbers can't update
+        const get = key => (stale ? null : limits.find(l => l.key === key)?.pct ?? null);
         const barH = Math.max(3, Math.floor((h - 4) / 2));
         const top = Math.floor((h - 2 * barH - 3) / 2);
         paintBar(cr, 0, top, w, barH, fg, {pct: get('five_hour')});
