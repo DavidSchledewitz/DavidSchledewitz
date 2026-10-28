@@ -750,7 +750,8 @@ class ClaudeUsageIndicator extends PanelMenu.Button {
             return;
         }
 
-        for (const limit of this._limits()) {
+        const now = Date.now() / 1000;
+        for (const limit of this._limits().filter(l => !U.finished(l, now))) {
             const section = vbox({style_class: 'claude-usage-section'});
             const top = new St.BoxLayout();
             top.add_child(this._label(limit.label, 'claude-usage-name', {x_expand: true}));

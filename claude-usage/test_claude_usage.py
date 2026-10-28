@@ -77,6 +77,20 @@ class ParseTests(unittest.TestCase):
             cu.append_history(SAMPLE, now + 60)  # nothing old enough: just appended
             self.assertEqual(len(times()), 3)
 
+    def test_used_up_or_expired_credits_are_hidden(self):
+        cloud = [l for l in cu.parse_limits(SAMPLE) if l.key == "iguana_necktie"][0]
+        self.assertFalse(cu.finished(cloud, NOW))
+        later = cloud.resets_at + timedelta(seconds=1)
+        self.assertTrue(cu.finished(cloud, later))
+        week = cu.parse_limits(SAMPLE)[1]
+        self.assertFalse(cu.finished(cu.Limit(**{**week.__dict__, "pct": 100.0}), NOW))  # real limits stay
+        used_up = {**SAMPLE, "iguana_necktie": {**SAMPLE["iguana_necktie"], "utilization": 100.0}}
+        st = cu.Style(False)
+        for data, shown in ((SAMPLE, True), (used_up, False)):
+            state = cu.State(data=data, fetched_at=0)
+            self.assertEqual("Cloud session credits" in "\n".join(cu.render(state, NOW, 80, st, live=False)), shown)
+            self.assertEqual(any(l.lstrip().startswith("cloud") for l in cu.render_compact(state, NOW, st, live=False)), shown)
+
     def test_cloud_credits(self):
         cloud = [l for l in cu.parse_limits(SAMPLE) if l.key == "iguana_necktie"][0]
         self.assertEqual(cloud.label, "Cloud session credits")
