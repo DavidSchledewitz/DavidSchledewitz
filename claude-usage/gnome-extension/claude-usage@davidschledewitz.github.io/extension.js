@@ -10,7 +10,7 @@
 // /usage in Claude Code, using the login Claude Code stores in
 // ~/.claude/.credentials.json (read-only). It shares a cache with the
 // claude-usage terminal tool, so running both doesn't double the requests.
-// "What used my limits?" runs `claude-usage report` (installed alongside)
+// "Usage Report" runs `claude-usage report` (installed alongside)
 // and opens its page in the browser.
 
 import Clutter from 'gi://Clutter';
@@ -70,7 +70,7 @@ class UsageError extends Error {
 
 const NO_LOGIN = 'No Claude Code login found. The desktop app\'s login can\'t be read by other programs.';
 const LOGIN_TIMEOUT = 10 * 60; // seconds to wait for the browser login
-const REPORT_LABEL = 'What used my limits? (opens your browser)';
+const REPORT_LABEL = 'Usage Report';
 
 /** Claude Code's command. The desktop session's PATH may lack ~/.local/bin. */
 function findClaude() {

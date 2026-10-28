@@ -594,7 +594,7 @@ def render(state: "State", now: datetime, width: int, st: Style, live: bool) -> 
         footer.append(f"updated {fmt_duration(max(0, time.time() - state.fetched_at))} ago")
     if live and state.next_fetch:
         footer.append(f"next in {fmt_duration(max(0, state.next_fetch - time.time()))}")
-        footer.append("[r] refresh  [a] what used it  [q] quit")
+        footer.append("[r] refresh  [a] usage report  [q] quit")
     lines.append(st(" " + " · ".join(footer), "90"))
     if state.note:
         lines.append(st(f" {state.note}", "36"))

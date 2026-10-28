@@ -8,7 +8,7 @@ resets. It comes in two forms:
 - **A GNOME top-bar extension**: an indicator next to the clock and wifi, with
   a popup. See [GNOME top bar](#gnome-top-bar-ubuntu).
 
-**What used my limits?** (in the top-bar popup, `a` in the terminal app, or
+**Usage Report** (in the top-bar popup, `a` in the terminal app, or
 `claude-usage report`) shows what used up your limits, per chat and per
 prompt, and why. See [What used my limits?](#what-used-my-limits).
 
@@ -161,7 +161,7 @@ set -g status-right '#(claude-usage --line)'
 
 ## What used my limits?
 
-Click **What used my limits?** in the top-bar popup, press `a` in the
+Click **Usage Report** in the top-bar popup, press `a` in the
 terminal app, or run:
 
 ```bash
@@ -222,7 +222,7 @@ its own offset for it, so it doesn't inflate the per-token rate.
 The top-bar icon shows two mini bars: the 5h session on top and the week
 below. Next to them are both percentages. Click it for the popup: every
 limit, a live countdown, day ticks on the weekly bars and the pace note, and
-**What used my limits?**, which builds the [report](#what-used-my-limits) and
+**Usage Report**, which builds the [report](#what-used-my-limits) and
 opens it in your browser.
 
 Install it for your user:
@@ -242,7 +242,7 @@ Notes:
   after an upgrade, run `journalctl -o cat -b /usr/bin/gnome-shell | grep -i claude`
   to see why.
 - It needs nothing beyond GNOME itself: no extra packages, and Python only
-  for **What used my limits?** (Ubuntu has it). It
+  for **Usage Report** (Ubuntu has it). It
   reads the same login and calls the same endpoint as the terminal app, and
   it shares the cache in `~/.cache/claude-usage/`. The terminal app and the
   extension can run side by side without doubling the requests.

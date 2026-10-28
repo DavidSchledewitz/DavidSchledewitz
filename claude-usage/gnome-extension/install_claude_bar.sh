@@ -31,7 +31,7 @@ fi
 mkdir -p "$(dirname "$DEST")"
 rm -rf "$DEST"
 cp -r "$SRC" "$DEST"
-# "What used my limits?" in the popup runs the report from these copies.
+# "Usage Report" in the popup runs the report from these copies.
 cp "$SRC/../../claude_usage.py" "$SRC/../../claude_usage_report.py" "$DEST/"
 echo "Installed to $DEST"
 
