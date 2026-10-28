@@ -45,6 +45,10 @@ eq('pace under', U.paceNote(limits[0], NOW), {text: '20% under pace · ~67% at r
 eq('pace over', U.paceNote(U.parseLimits({five_hour: {utilization: 90, resets_at: iso(2 * U.HOUR)}})[0], NOW),
     {text: '30% over pace · limit in ~20m at this rate', over: true});
 eq('weekly pace', U.paceNote(limits[1], NOW), {text: 'day 4 of 7 · 43% under pace · ~22% at reset', over: false});
+eq('cloud credits shown while left', U.finished(limits[3], NOW), false);
+eq('cloud credits used up', U.finished({...limits[3], pct: 100}, NOW), true);
+eq('cloud credits expired', U.finished({...limits[3], resetsAt: NOW - 1}, NOW), true);
+eq('weekly limit at 100% stays', U.finished({...limits[1], pct: 100}, NOW), false);
 eq('window days', [U.windowDays(limits[0]), U.windowDays(limits[1])], [0, 7]);
 // Same fields as history_line in claude_usage.py, which claude_usage_report.py reads.
 eq('history line', U.historyLine({five_hour: {utilization: 40, resets_at: '2026-10-16T14:00:00Z'},

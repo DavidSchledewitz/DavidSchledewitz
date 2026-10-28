@@ -106,6 +106,16 @@ export function elapsedFraction(limit, now) {
     return Math.min(1, Math.max(0, 1 - left / limit.window));
 }
 
+/**
+ * A one-off allowance (cloud session credits) that is used up or has
+ * expired. Not shown; new credits show up again by themselves.
+ */
+export function finished(limit, now) {
+    if (!EXPIRING.includes(limit.key))
+        return false;
+    return (limit.pct !== null && limit.pct >= 100) || secondsLeft(limit, now) === 0;
+}
+
 /** Number of days in a multi-day window (7 for weekly), else 0. */
 export function windowDays(limit) {
     return limit.window && limit.window >= 2 * DAY ? Math.floor(limit.window / DAY) : 0;

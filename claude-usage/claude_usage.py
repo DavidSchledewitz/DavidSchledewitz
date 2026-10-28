@@ -337,6 +337,14 @@ class Limit:
         return min(1.0, max(0.0, 1 - left / self.window))
 
 
+def finished(limit: Limit, now: datetime) -> bool:
+    """A one-off allowance (cloud session credits) that is used up or has
+    expired. Not shown; new credits show up again by themselves."""
+    if limit.key not in EXPIRING:
+        return False
+    return (limit.pct is not None and limit.pct >= 100) or limit.seconds_left(now) == 0
+
+
 def parse_time(value) -> datetime | None:
     if not value or not isinstance(value, str):
         return None
@@ -551,7 +559,7 @@ def render(state: "State", now: datetime, width: int, st: Style, live: bool) -> 
             lines.append(st(" Press l to log in (opens your browser).", "36"))
         return lines
 
-    for limit in parse_limits(state.data):
+    for limit in (l for l in parse_limits(state.data) if not finished(l, now)):
         pct_txt = "  —" if limit.pct is None else f"{limit.pct:3.0f}%"
         gap = max(1, inner - len(limit.label) - len(pct_txt))
         lines.append(" " + st(limit.label, "1") + " " * gap + st(pct_txt, "1", st.for_pct(limit.pct)))
@@ -567,7 +575,7 @@ def render(state: "State", now: datetime, width: int, st: Style, live: bool) -> 
             else:
                 detail = "no reset scheduled"
         elif left == 0:
-            detail = "expired" if limit.key in EXPIRING else "resetting now…"
+            detail = "resetting now…"
         else:
             verb = "expires" if limit.key in EXPIRING else "resets"
             detail = (f"{verb} in {st(fmt_duration(left, with_seconds=live), '1')}"
@@ -636,7 +644,7 @@ def render_compact(state: "State", now: datetime, st: Style, live: bool) -> list
 
     if state.data is not None:
         day_row_done = False
-        for limit in parse_limits(state.data):
+        for limit in (l for l in parse_limits(state.data) if not finished(l, now)):
             left = limit.seconds_left(now)
             if left is None:
                 right = "—"
