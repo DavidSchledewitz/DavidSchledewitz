@@ -64,6 +64,19 @@ class ParseTests(unittest.TestCase):
             lines = cu.history_path().read_text().splitlines()
         self.assertEqual([json.loads(l)["t"] for l in lines], [1, 2])
 
+    def test_history_keeps_90_days(self):
+        day = 86400
+        now = 200 * day
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}):
+            times = lambda: [json.loads(l)["t"] for l in cu.history_path().read_text().splitlines()]
+            for t in (now - 120 * day, now - 95 * day, now - 89 * day):
+                cu.append_history(SAMPLE, t)
+            self.assertEqual(len(times()), 3)  # nothing 97+ days older than the newest yet
+            cu.append_history(SAMPLE, now)  # now the first is 120 days old: cut to 90 days
+            self.assertEqual(times(), [now - 89 * day, now])
+            cu.append_history(SAMPLE, now + 60)  # nothing old enough: just appended
+            self.assertEqual(len(times()), 3)
+
     def test_cloud_credits(self):
         cloud = [l for l in cu.parse_limits(SAMPLE) if l.key == "iguana_necktie"][0]
         self.assertEqual(cloud.label, "Cloud session credits")

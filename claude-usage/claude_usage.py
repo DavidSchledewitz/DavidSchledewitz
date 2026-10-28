@@ -721,9 +721,12 @@ def history_line(data: dict, fetched_at: float) -> str | None:
     return json.dumps({"t": round(fetched_at, 1), "limits": limits}, separators=(",", ":"))
 
 
+HISTORY_DAYS = 90  # readings kept; the report looks back 35 days
+
+
 def append_history(data: dict, fetched_at: float) -> None:
     """Keep every reading, so `claude-usage report` can calibrate token counts
-    against the real percentages. About 30 KB a day."""
+    against the real percentages. About 40 KB a day, at most 90 days of it."""
     line = history_line(data, fetched_at)
     if line is None:
         return
@@ -732,6 +735,35 @@ def append_history(data: dict, fetched_at: float) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "a", encoding="utf-8") as f:
             f.write(line + "\n")  # one short write, so the two apps never interleave lines
+    except OSError:
+        return
+    prune_history(fetched_at)
+
+
+def prune_history(now: float) -> None:
+    """Drop readings older than HISTORY_DAYS. Only rewrites the file when the
+    oldest reading is a week past that, so about once a week."""
+    path = history_path()
+    try:
+        with open(path, encoding="utf-8") as f:
+            first = json.loads(f.readline())["t"]
+        if float(first) >= now - (HISTORY_DAYS + 7) * DAY:
+            return
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, ValueError, KeyError, TypeError):
+        return
+    cutoff = now - HISTORY_DAYS * DAY
+    keep = []
+    for line in lines:
+        try:
+            if float(json.loads(line)["t"]) >= cutoff:
+                keep.append(line + "\n")
+        except (ValueError, KeyError, TypeError):
+            continue
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text("".join(keep), encoding="utf-8")
+        tmp.replace(path)
     except OSError:
         pass
 

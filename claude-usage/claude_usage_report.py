@@ -766,6 +766,7 @@ def main(argv: list[str] | None = None) -> int:
 
     now = time.time()
     _, plan, warn = current_reading(not args.no_fetch)
+    cu.prune_history(now)  # the top bar only appends; trimming happens here and in the terminal app
     try:
         plan = plan or cu.load_credentials().plan
     except cu.UsageError:

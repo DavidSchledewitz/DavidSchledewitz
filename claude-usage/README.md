@@ -200,7 +200,9 @@ Subagents each build their own context. And output, thinking included, costs
 token counts in `~/.claude/projects`. Anthropic doesn't publish how tokens
 turn into percent of your limits, so the report learns it: the terminal app
 and the top bar log every usage reading to
-`~/.local/share/claude-usage/history.jsonl` (about 30 KB a day). A reading
+`~/.local/share/claude-usage/history.jsonl` (about 40 KB a day; readings
+older than 90 days are deleted, so it stays under ~10 MB). The report page is
+rewritten on every run, so it doesn't pile up either. A reading
 says "X% used since this window started"; the transcripts say which tokens
 were used in the same time. Fitting the two gives "percent per token",
 weighted by model and token type using API prices. One reading is enough for
