@@ -199,6 +199,22 @@ def cowork_dirs() -> list[Path]:
     return [b / app / COWORK for b in bases for app in ("Claude", "Claude-3p")]
 
 
+def cowork_title(transcript: Path) -> str:
+    """The title the desktop app shows for a Cowork session, from the session's
+    state file local_<id>.json next to its folder; "" if not found."""
+    for folder in transcript.parents:
+        if folder.name.startswith("local_"):
+            try:
+                state = json.loads(folder.with_name(folder.name + ".json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return ""
+            for key in ("title", "name", "sessionTitle", "displayName"):
+                if isinstance(state, dict) and isinstance(state.get(key), str) and state[key].strip():
+                    return state[key].strip()
+            return ""
+    return ""
+
+
 def transcript_dirs() -> list[Path]:
     dirs = [cu.claude_config_dir() / "projects", Path.home() / ".config" / "claude" / "projects", *cowork_dirs()]
     seen, out = set(), []
@@ -258,10 +274,13 @@ def load_sessions(since: float, dirs: list[Path] | None = None) -> dict[str, Ses
                 t = parse_ts(d.get("timestamp"))
                 if t is None or t < since:
                     continue
-                if cowork:
-                    s.project = "Cowork"  # its cwd is a path inside the VM
-                elif not s.project and isinstance(d.get("cwd"), str):
-                    s.project = d["cwd"]
+                cwd = d.get("cwd") if isinstance(d.get("cwd"), str) else ""
+                if cowork or COWORK in cwd:  # its cwd is the session's scratch folder
+                    s.project = "Cowork"
+                    if not s.title:
+                        s.title = cowork_title(path)
+                elif not s.project and cwd:
+                    s.project = cwd
                 msg = d.get("message") if isinstance(d.get("message"), dict) else {}
                 sidechain = bool(d.get("isSidechain")) or in_subagent_dir
                 if kind == "assistant":

@@ -143,10 +143,14 @@ class CoworkTests(unittest.TestCase):
                                              "CLAUDE_CONFIG_DIR": str(Path(tmp) / ".claude")}):
             root = Path(tmp) / ".config" / "Claude" / rep.COWORK
             self.assertIn(root, rep.cowork_dirs())
-            sess = root / "org" / "dev" / "local_abc"
-            lines = [user("cw", T0, "sort my inbox", cwd="/sessions/brave-owl"),
-                     assistant("cw", T0 + 5, "c1", usage(cw=20000, out=300), cwd="/sessions/brave-owl")]
-            write(sess / ".claude" / "projects" / "-sessions-brave-owl" / "cw.jsonl", lines)
+            # The layout as found on Linux: the session's scratch folder is
+            # its cwd, so the project folder name ends in "-outputs".
+            sess = root / "96fc3670" / "0baa8912" / "local_133c973b"
+            cwd = str(sess / "outputs")
+            lines = [user("cw", T0, "sort my inbox", cwd=cwd),
+                     assistant("cw", T0 + 5, "c1", usage(cw=20000, out=300), cwd=cwd)]
+            write(sess / ".claude" / "projects" / cwd.replace("/", "-").replace(".", "-") / "cw.jsonl", lines)
+            sess.with_name("local_133c973b.json").write_text(json.dumps({"title": "Inbox cleanup"}))
             # the event log and the user's own files are not transcripts
             write(sess / "audit.jsonl", [assistant("cw", T0 + 6, "dup", usage(cw=99999))])
             write(sess / "uploads" / "data.jsonl", [assistant("x", T0, "u1", usage(cw=99999))])
@@ -155,6 +159,7 @@ class CoworkTests(unittest.TestCase):
             sessions = rep.load_sessions(T0 - 3600)
         self.assertEqual(list(sessions), ["cw"])
         self.assertEqual(sessions["cw"].project, "Cowork")
+        self.assertEqual(sessions["cw"].title, "Inbox cleanup")
         self.assertEqual(len(sessions["cw"].requests), 1)
         self.assertEqual(sessions["cw"].prompts[0].text, "sort my inbox")
 
