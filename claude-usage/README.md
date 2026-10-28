@@ -208,14 +208,20 @@ a rough number; it gets better the longer the top bar or `claude-usage` runs.
 The report page shows the typical error. Without any readings, amounts are
 API-equivalent dollars.
 
-**What it can't see.** claude.ai chats, the desktop app, Claude Code on the
-web and other computers count against the same limits but leave no
-transcripts here. (A Claude Code on the web session keeps its transcript in
-its own cloud machine: ask it to run
-`python3 claude-usage/claude_usage.py report --no-open` there and send you
-the page.) The window charts show that part as the gap between the
-measured line and the colored area, and the calibration gives each window
-its own offset for it, so it doesn't inflate the per-token rate.
+**What it covers.** Claude Code on this computer (terminal, IDE, the
+desktop app's Code tab) and the desktop app's **Cowork** sessions, which it
+finds in the app's data folder (`~/.config/Claude/local-agent-mode-sessions`
+on Linux, `~/Library/Application Support/Claude/...` on macOS,
+`%APPDATA%\Claude\...` on Windows).
+
+**What it can't break down.** claude.ai chats, the desktop app's chat, the
+phone and other computers count against the same limits, but those
+conversations are kept on Anthropic's servers, not here. Their total still
+shows up: the window charts draw it as a gray **Elsewhere** band, the part of
+the measured readings that local usage doesn't explain (beyond the
+calibration error). The calibration also gives each window its own offset for
+it, so it doesn't inflate the per-token rate. Claude Code on the web runs on
+separate cloud credits, not on these limits.
 
 ## GNOME top bar (Ubuntu)
 

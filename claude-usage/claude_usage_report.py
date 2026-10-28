@@ -185,8 +185,22 @@ def result_tokens(content) -> int:
     return 0
 
 
+COWORK = "local-agent-mode-sessions"  # the desktop app's Cowork sessions
+
+
+def cowork_dirs() -> list[Path]:
+    """Where the Claude desktop app keeps Cowork sessions. Cowork runs Claude
+    Code in a small VM, and each session's working folder holds its
+    transcript in the same format as ~/.claude/projects."""
+    home = Path.home()
+    bases = [Path(os.environ.get("XDG_CONFIG_HOME") or home / ".config"),  # Linux
+             home / "Library" / "Application Support"]  # macOS
+    bases += [Path(os.environ[v]) for v in ("APPDATA", "LOCALAPPDATA") if os.environ.get(v)]  # Windows
+    return [b / app / COWORK for b in bases for app in ("Claude", "Claude-3p")]
+
+
 def transcript_dirs() -> list[Path]:
-    dirs = [cu.claude_config_dir() / "projects", Path.home() / ".config" / "claude" / "projects"]
+    dirs = [cu.claude_config_dir() / "projects", Path.home() / ".config" / "claude" / "projects", *cowork_dirs()]
     seen, out = set(), []
     for d in dirs:
         r = d.resolve() if d.exists() else None
@@ -218,7 +232,11 @@ def load_sessions(since: float, dirs: list[Path] | None = None) -> dict[str, Ses
     seen: dict[tuple, Request] = {}
     tool_names: dict[str, str] = {}
     for base in dirs if dirs is not None else transcript_dirs():
+        cowork = COWORK in base.parts
         for path in sorted(base.rglob("*.jsonl")):
+            # In Cowork folders, skip the event log and the user's own files.
+            if cowork and (path.name == "audit.jsonl" or {"uploads", "outputs"} & set(path.parts)):
+                continue
             try:
                 if path.stat().st_mtime < since:
                     continue
@@ -240,7 +258,9 @@ def load_sessions(since: float, dirs: list[Path] | None = None) -> dict[str, Ses
                 t = parse_ts(d.get("timestamp"))
                 if t is None or t < since:
                     continue
-                if not s.project and isinstance(d.get("cwd"), str):
+                if cowork:
+                    s.project = "Cowork"  # its cwd is a path inside the VM
+                elif not s.project and isinstance(d.get("cwd"), str):
                     s.project = d["cwd"]
                 msg = d.get("message") if isinstance(d.get("message"), dict) else {}
                 sidechain = bool(d.get("isSidechain")) or in_subagent_dir
@@ -901,9 +921,12 @@ details p, details li { color: var(--ink2); }
       <p><b>Percentages</b> are calibrated: claude-usage and the top bar log every real usage reading, and the report fits
         those readings against the local token counts, weighted by API prices. With few readings the numbers are rough;
         they improve as readings accumulate. Without any readings, amounts are shown as API-equivalent dollars.</p>
-      <p><b>Not included</b>: claude.ai chats, the desktop app, Claude Code on the web and other computers. They count
-        against the same limits but leave no transcripts here. In the window charts, the gap between the measured line
-        and the colored area is that usage (plus calibration error).</p>
+      <p><b>Included</b>: Claude Code on this computer (terminal, IDE, the desktop app's Code tab) and the desktop
+        app's Cowork sessions. <b>Not broken down</b>: claude.ai chats, the desktop app's chat, the phone and other
+        computers. They count against the same limits but their conversations are kept on Anthropic's servers, so
+        the report can't split them up. The gray "Elsewhere" band in the window charts is their total: what the
+        measured readings show beyond the local usage (within the calibration error). Claude Code on the web runs on
+        separate cloud credits.</p>
     </details>
   </section>
 </main>
@@ -1088,7 +1111,7 @@ function timeChart(box, o) {
       stackTops.push(top);
       const lower = o.stacked ? base : new Array(n).fill(0);
       sv("path", {d: `M${pts(top).join("L")}L${pts(lower).reverse().join("L")}Z`,
-        style: `fill:${layer.color};fill-opacity:${o.stacked ? 0.9 : 0.12}`}, svg);
+        style: `fill:${layer.color};fill-opacity:${o.stacked ? layer.opacity ?? 0.9 : 0.12}`}, svg);
       // stacked: a 2px surface line separates the layers; single: the 2px series line
       sv("polyline", {points: pts(top).join(" "), style: o.stacked ? "fill:none;stroke:var(--surface);stroke-width:2;stroke-linejoin:round" :
         `fill:none;stroke:${layer.color};stroke-width:2;stroke-linejoin:round;stroke-linecap:round`}, svg);
@@ -1210,7 +1233,23 @@ function renderWindow(key) {
   const tEnd = Math.max(w.s + 60, Math.min(w.e, D.generated));
   const {grid, values} = cumulate(w.reqs, w.s, tEnd, layers.length, layerOf, u);
   const measured = u === LIMIT_UNIT[key] ? w.readings : [];  // readings only on their own scale
-  const total = k => layers.reduce((a, _, L) => a + values[L][k], 0);
+  const nLocal = layers.length;
+  const total = k => layers.slice(0, nLocal).reduce((a, _, L) => a + values[L][k], 0);
+  // What the readings show beyond the local transcripts: claude.ai and the
+  // desktop app's chat, the phone, other computers. Held from one reading to
+  // the next; gaps within the calibration error are left out.
+  let elsewhere = 0;
+  if (measured.length) {
+    const local = grid.map((_, k) => total(k));
+    const noise = Math.max(1, D.fit[key] ? D.fit[key].err || 0 : 0);
+    const gapAt = measured.map(([t, v]) => { const d = v - valueAt(local, grid, t); return d > noise ? d : 0; });
+    const band = grid.map(t => { let i = -1; while (i + 1 < measured.length && measured[i + 1][0] <= t) i++; return i < 0 ? 0 : gapAt[i]; });
+    elsewhere = gapAt[gapAt.length - 1];
+    if (band.some(v => v > 0)) {
+      layers.push({si: null, name: "Elsewhere: claude.ai, phone, other PCs", color: "var(--muted)", opacity: 0.35});
+      values.push(band);
+    }
+  }
 
   const chart = h("div", {class: "chart"});
   box.append(chart);
@@ -1267,7 +1306,11 @@ function renderWindow(key) {
       h("span", {class: "t"}, sessionName(si), " ", h("span", {class: "muted small"}, D.sessions[si].project)),
       h("span", {class: "track"}, h("i", {style: `width:${Math.max(1, 100 * v / max)}%;background:${color}`})),
       h("span", {class: "num"}, fmt(v, u)));
-  })));
+  }), elsewhere > 0 ? h("div", {class: "row", style: "cursor:default"},
+    h("i", {class: "sw", style: "background:var(--muted);opacity:.5"}),
+    h("span", {class: "t"}, "Elsewhere ", h("span", {class: "muted small"}, "claude.ai and desktop chat, phone, other computers (no breakdown available)")),
+    h("span", {class: "track"}, h("i", {style: `width:${Math.min(100, Math.max(1, 100 * elsewhere / max))}%;background:var(--muted);opacity:.5`})),
+    h("span", {class: "num"}, fmt(elsewhere, u))) : null));
 }
 
 // ---------------------------------------------------------------- tiles
@@ -1497,7 +1540,7 @@ function renderAll() {
 }
 document.getElementById("gen").textContent =
   `Generated ${fmtDT(D.generated)}${D.plan ? " · " + D.plan.charAt(0).toUpperCase() + D.plan.slice(1) + " plan" : ""} · ` +
-  `${D.sessions.length} Claude Code chat${D.sessions.length === 1 ? "" : "s"} from the last ${D.days} days on this computer`;
+  `${D.sessions.length} Claude Code and Cowork chat${D.sessions.length === 1 ? "" : "s"} from the last ${D.days} days on this computer`;
 if (D.warning) {
   const w = document.getElementById("warning");
   w.textContent = "⚠ Couldn't read your current usage: " + D.warning;

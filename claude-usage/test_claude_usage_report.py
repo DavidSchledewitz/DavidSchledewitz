@@ -136,6 +136,29 @@ class LoadTests(unittest.TestCase):
         self.assertEqual(rep.price("something-new"), rep.DEFAULT_PRICE)
 
 
+class CoworkTests(unittest.TestCase):
+    def test_cowork_sessions_are_read(self):
+        with tempfile.TemporaryDirectory() as tmp, \
+                mock.patch.dict(os.environ, {"HOME": tmp, "XDG_CONFIG_HOME": str(Path(tmp) / ".config"),
+                                             "CLAUDE_CONFIG_DIR": str(Path(tmp) / ".claude")}):
+            root = Path(tmp) / ".config" / "Claude" / rep.COWORK
+            self.assertIn(root, rep.cowork_dirs())
+            sess = root / "org" / "dev" / "local_abc"
+            lines = [user("cw", T0, "sort my inbox", cwd="/sessions/brave-owl"),
+                     assistant("cw", T0 + 5, "c1", usage(cw=20000, out=300), cwd="/sessions/brave-owl")]
+            write(sess / ".claude" / "projects" / "-sessions-brave-owl" / "cw.jsonl", lines)
+            # the event log and the user's own files are not transcripts
+            write(sess / "audit.jsonl", [assistant("cw", T0 + 6, "dup", usage(cw=99999))])
+            write(sess / "uploads" / "data.jsonl", [assistant("x", T0, "u1", usage(cw=99999))])
+            root.mkdir(parents=True, exist_ok=True)
+            self.assertIn(root, rep.transcript_dirs())
+            sessions = rep.load_sessions(T0 - 3600)
+        self.assertEqual(list(sessions), ["cw"])
+        self.assertEqual(sessions["cw"].project, "Cowork")
+        self.assertEqual(len(sessions["cw"].requests), 1)
+        self.assertEqual(sessions["cw"].prompts[0].text, "sort my inbox")
+
+
 class WindowTests(unittest.TestCase):
     def test_five_hour_inferred_from_activity(self):
         times = [T0, T0 + HOUR, T0 + 6 * HOUR]
