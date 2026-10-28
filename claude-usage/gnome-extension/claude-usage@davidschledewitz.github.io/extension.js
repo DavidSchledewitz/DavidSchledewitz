@@ -29,6 +29,9 @@ import * as U from './usage.js';
 
 Gio._promisify(Gio.File.prototype, 'load_contents_async');
 Gio._promisify(Gio.File.prototype, 'replace_contents_bytes_async', 'replace_contents_finish');
+Gio._promisify(Gio.File.prototype, 'append_to_async');
+Gio._promisify(Gio.OutputStream.prototype, 'write_bytes_async');
+Gio._promisify(Gio.OutputStream.prototype, 'close_async');
 Gio._promisify(Soup.Session.prototype, 'send_and_read_async');
 
 function expired(creds) {
@@ -197,6 +200,7 @@ class UsageSource {
                 this.data = await this._fetchRenewing(creds);
                 this.fetchedAt = Date.now() / 1000;
                 await this._writeCache();
+                await this._appendHistory();
             }
             this.error = null;
             this.loginNeeded = false;
@@ -416,6 +420,24 @@ class UsageSource {
             const json = JSON.stringify({fetched_at: this.fetchedAt, data: this.data});
             await file.replace_contents_bytes_async(new GLib.Bytes(new TextEncoder().encode(json)),
                 null, false, Gio.FileCreateFlags.REPLACE_DESTINATION, this._cancellable);
+        } catch (e) {
+            if (e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
+                throw e;
+        }
+    }
+
+    async _appendHistory() {
+        const line = U.historyLine(this.data, this.fetchedAt);
+        if (line === null)
+            return;
+        const file = Gio.File.new_for_path(GLib.build_filenamev([GLib.get_user_data_dir(), 'claude-usage', 'history.jsonl']));
+        try {
+            GLib.mkdir_with_parents(file.get_parent().get_path(), 0o755);
+            const stream = await file.append_to_async(Gio.FileCreateFlags.NONE, GLib.PRIORITY_DEFAULT, this._cancellable);
+            // One short write, so the terminal app and this never interleave lines.
+            await stream.write_bytes_async(new GLib.Bytes(new TextEncoder().encode(`${line}\n`)),
+                GLib.PRIORITY_DEFAULT, this._cancellable);
+            await stream.close_async(GLib.PRIORITY_DEFAULT, this._cancellable);
         } catch (e) {
             if (e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
                 throw e;

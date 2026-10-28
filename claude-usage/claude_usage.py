@@ -14,6 +14,7 @@ Modes:
     claude-usage --line     one compact line, for tmux / status bars
     claude-usage --json     raw JSON from the API
     claude-usage --login    log in again via Claude Code (opens your browser)
+    claude-usage report     what used your limits, per chat and per prompt (HTML)
 
 An expired login is renewed the way Claude Code renews it and written back to
 Claude Code's credentials file, so a browser login is rarely needed. Turn that
@@ -690,12 +691,45 @@ def read_cache(max_age: float) -> tuple[dict, float] | None:
 
 
 def write_cache(data: dict, fetched_at: float) -> None:
+    """Called after every fresh fetch, so it also logs the reading."""
     path = cache_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps({"fetched_at": fetched_at, "data": data}))
         tmp.replace(path)
+    except OSError:
+        pass
+    append_history(data, fetched_at)
+
+
+def history_path() -> Path:
+    base = os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share"
+    return Path(base) / "claude-usage" / "history.jsonl"
+
+
+def history_line(data: dict, fetched_at: float) -> str | None:
+    """One reading as a line of history.jsonl. The top-bar extension writes
+    the same format (usage.js historyLine)."""
+    limits = {key: {"pct": val.get("utilization"), "resets_at": val.get("resets_at")}
+              for key, val in data.items()
+              if isinstance(val, dict) and "utilization" in val and key != "extra_usage"}
+    if not limits:
+        return None
+    return json.dumps({"t": round(fetched_at, 1), "limits": limits}, separators=(",", ":"))
+
+
+def append_history(data: dict, fetched_at: float) -> None:
+    """Keep every reading, so `claude-usage report` can calibrate token counts
+    against the real percentages. About 30 KB a day."""
+    line = history_line(data, fetched_at)
+    if line is None:
+        return
+    path = history_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(line + "\n")  # one short write, so the two apps never interleave lines
     except OSError:
         pass
 
@@ -875,9 +909,14 @@ def open_window(zoom: float, passthrough: list[str]) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["report"]:
+        import claude_usage_report
+        return claude_usage_report.main(argv[1:])
     p = argparse.ArgumentParser(
         prog="claude-usage",
         description="Live view of your Claude plan usage: 5h session, weekly limits, time to reset.",
+        epilog="`claude-usage report` shows what used your limits, per chat and per prompt.",
     )
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("--once", action="store_true", help="print the dashboard once and exit")

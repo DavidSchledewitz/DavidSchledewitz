@@ -8,6 +8,9 @@ resets. It comes in two forms:
 - **A GNOME top-bar extension**: an indicator next to the clock and wifi, with
   a popup. See [GNOME top bar](#gnome-top-bar-ubuntu).
 
+`claude-usage report` shows **what used up your limits**, per chat and per
+prompt, and why. See [What used my limits?](#what-used-my-limits).
+
 This is a beta built on an undocumented Anthropic endpoint, so it can
 break without notice.
 
@@ -112,6 +115,7 @@ How to read it:
 | `claude-usage --once` | Prints the dashboard once (add `-c` for the small one). |
 | `claude-usage --line` | Prints one line, e.g. `5h 62% (1h47m) · wk 34% (4d5h)` |
 | `claude-usage --json` | Prints the raw API response. |
+| `claude-usage report` | What used your limits, per chat and per prompt, as a page in your browser. See [What used my limits?](#what-used-my-limits). |
 | `claude-usage --login` | Logs in again with Claude Code's own login (`claude auth login`), which opens your browser. In the live view, `l` does the same when the login has expired. |
 | `--zoom 0.7` | Font scale for `--window` (1.0 = normal). |
 | `-i 600`, `--interval 600` | Seconds between polls in live mode (default 300, minimum 60). |
@@ -153,6 +157,55 @@ set -g status-right '#(claude-usage --line)'
 ```json
 { "statusLine": { "type": "command", "command": "claude-usage --line" } }
 ```
+
+## What used my limits?
+
+```bash
+claude-usage report
+```
+
+This writes `~/.cache/claude-usage/report.html` and opens it. It shows:
+
+- **5-hour and weekly windows**: how each window filled up over time, split
+  by chat, with the real `/usage` percentage drawn on top. Hover for the
+  numbers at any moment, click a band to open that chat.
+- **Chats**: which chats used the most in the selected window, the week, or
+  everything, and what kind of usage it was.
+- **One chat**: how fast it used your limit (with 5h resets marked), and every
+  prompt with its share, the tools it ran, the context size of each call and
+  the reasons it was expensive, e.g. *"46 model calls, each re-reading the
+  conversation (~240k tokens)"*, *"cache expired after 2h 10m idle: the whole
+  conversation was cached again"*, *"4 subagents: each starts its own
+  context"*, *"106k tokens written, 43k of it thinking"*.
+
+The terminal prints a short summary too. Options: `--days 35` (how far back),
+`-o FILE`, `--no-open`, `--no-fetch`, `--json`.
+
+**Why one prompt can cost more than twenty.** Every step of a prompt (each
+tool call) sends the whole conversation to the model again. Twenty short
+questions in fresh chats are cheap; one long agentic prompt deep into a big
+chat repeats a large context dozens of times. Coming back to a chat after the
+cache expired (5 min or 1 h) pays to cache the whole conversation again.
+Subagents each build their own context. And output, thinking included, costs
+5x as much as input per token.
+
+**How the percentages work.** Claude Code saves every model call with its
+token counts in `~/.claude/projects`. Anthropic doesn't publish how tokens
+turn into percent of your limits, so the report learns it: the terminal app
+and the top bar log every usage reading to
+`~/.local/share/claude-usage/history.jsonl` (about 30 KB a day). A reading
+says "X% used since this window started"; the transcripts say which tokens
+were used in the same time. Fitting the two gives "percent per token",
+weighted by model and token type using API prices. One reading is enough for
+a rough number; it gets better the longer the top bar or `claude-usage` runs.
+The report page shows the typical error. Without any readings, amounts are
+API-equivalent dollars.
+
+**What it can't see.** claude.ai chats, the desktop app, Claude Code on the
+web and other computers count against the same limits but leave no
+transcripts here. The window charts show that part as the gap between the
+measured line and the colored area, and the calibration gives each window
+its own offset for it, so it doesn't inflate the per-token rate.
 
 ## GNOME top bar (Ubuntu)
 
@@ -225,5 +278,6 @@ Things to know:
 
 ```bash
 python3 -m unittest -v test_claude_usage     # terminal app, includes a fake-server end-to-end run
+python3 -m unittest -v test_claude_usage_report   # report: transcripts, calibration, page
 gjs -m gnome-extension/tests/test_usage.js   # extension's parsing/pace logic
 ```

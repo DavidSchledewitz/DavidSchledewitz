@@ -46,6 +46,11 @@ eq('pace over', U.paceNote(U.parseLimits({five_hour: {utilization: 90, resets_at
     {text: '30% over pace · limit in ~20m at this rate', over: true});
 eq('weekly pace', U.paceNote(limits[1], NOW), {text: 'day 4 of 7 · 43% under pace · ~22% at reset', over: false});
 eq('window days', [U.windowDays(limits[0]), U.windowDays(limits[1])], [0, 7]);
+// Same fields as history_line in claude_usage.py, which claude_usage_report.py reads.
+eq('history line', U.historyLine({five_hour: {utilization: 40, resets_at: '2026-10-16T14:00:00Z'},
+    seven_day_opus: {utilization: null}, extra_usage: {is_enabled: true, utilization: 3}}, 1760616000.04),
+'{"t":1760616000,"limits":{"five_hour":{"pct":40,"resets_at":"2026-10-16T14:00:00Z"},"seven_day_opus":{"pct":null,"resets_at":null}}}');
+eq('history line without limits', U.historyLine({extra_usage: {is_enabled: false}}, 1), null);
 
 print(`${ran - failed}/${ran} passed`);
 System.exit(failed ? 1 : 0);
