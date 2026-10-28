@@ -7,7 +7,7 @@ your machine and asks the same endpoint the `/usage` command in Claude Code
 uses. No third-party dependencies.
 
 Modes:
-    claude-usage            live dashboard (q to quit, r to refresh)
+    claude-usage            live dashboard (q to quit, r to refresh, a for the report)
     claude-usage --compact  small live dashboard (also automatic in narrow windows)
     claude-usage --window   open the small dashboard in its own terminal window
     claude-usage --once     print the dashboard once and exit
@@ -594,8 +594,10 @@ def render(state: "State", now: datetime, width: int, st: Style, live: bool) -> 
         footer.append(f"updated {fmt_duration(max(0, time.time() - state.fetched_at))} ago")
     if live and state.next_fetch:
         footer.append(f"next in {fmt_duration(max(0, state.next_fetch - time.time()))}")
-        footer.append("[r] refresh  [q] quit")
+        footer.append("[r] refresh  [a] what used it  [q] quit")
     lines.append(st(" " + " · ".join(footer), "90"))
+    if state.note:
+        lines.append(st(f" {state.note}", "36"))
     if state.login_proc is not None:
         lines.append(st(" Waiting for you to log in in the browser…", "36"))
     elif state.error:
@@ -745,6 +747,8 @@ class State:
     login_needed: bool = False
     login_proc: subprocess.Popen | None = None
     login_started: float = 0.0
+    report_proc: subprocess.Popen | None = None
+    note: str | None = None  # one-off message, e.g. from the report
 
     def start_login(self) -> None:
         """Run Claude Code's browser login in the background (live mode)."""
@@ -775,6 +779,22 @@ class State:
             self.next_fetch = 0
         else:
             self.error = "The login didn't complete. Press l to try again."
+
+    def start_report(self) -> None:
+        """Build `claude-usage report` in the background; it opens in the browser."""
+        if self.report_proc is None:
+            self.report_proc = subprocess.Popen(
+                [sys.executable, os.path.realpath(__file__), "report"], stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, start_new_session=True)
+            self.note = "Building the report… it opens in your browser."
+
+    def check_report(self) -> None:
+        if self.report_proc is None or self.report_proc.poll() is None:
+            return
+        err = self.report_proc.stderr.read().strip().splitlines()
+        self.report_proc.stderr.close()
+        self.note = None if self.report_proc.returncode == 0 else f"report: {err[-1] if err else 'failed'}"
+        self.report_proc = None
 
     def refresh(self, interval: float) -> None:
         try:
@@ -859,6 +879,7 @@ def run_live(interval: float, st: Style, compact: bool = False) -> None:
     with Terminal() as term:
         while True:
             state.check_login()
+            state.check_report()
             if time.time() >= state.next_fetch and state.login_proc is None:
                 state.refresh(interval)
             cols = shutil.get_terminal_size((80, 24)).columns
@@ -872,6 +893,8 @@ def run_live(interval: float, st: Style, compact: bool = False) -> None:
                 return
             if key in ("r", "R"):
                 state.next_fetch = 0
+            if key in ("a", "A"):
+                state.start_report()
             if key in ("l", "L") and state.login_needed:
                 state.start_login()
 

@@ -8,7 +8,8 @@ resets. It comes in two forms:
 - **A GNOME top-bar extension**: an indicator next to the clock and wifi, with
   a popup. See [GNOME top bar](#gnome-top-bar-ubuntu).
 
-`claude-usage report` shows **what used up your limits**, per chat and per
+**What used my limits?** (in the top-bar popup, `a` in the terminal app, or
+`claude-usage report`) shows what used up your limits, per chat and per
 prompt, and why. See [What used my limits?](#what-used-my-limits).
 
 This is a beta built on an undocumented Anthropic endpoint, so it can
@@ -109,7 +110,7 @@ How to read it:
 
 | Command | What it does |
 |---|---|
-| `claude-usage` | Live dashboard. Polls every 5 min and ticks every second. `r` refreshes, `q` quits. |
+| `claude-usage` | Live dashboard. Polls every 5 min and ticks every second. `r` refreshes, `a` opens the [report](#what-used-my-limits), `q` quits. |
 | `claude-usage -c`, `--compact` | Small live dashboard (about 42×6). It's used automatically when the window is under 50 columns. |
 | `claude-usage -w`, `--window` | Opens the compact dashboard in its own small GNOME Terminal window, zoomed out to 0.8 and without a menu bar. |
 | `claude-usage --once` | Prints the dashboard once (add `-c` for the small one). |
@@ -160,11 +161,15 @@ set -g status-right '#(claude-usage --line)'
 
 ## What used my limits?
 
+Click **What used my limits?** in the top-bar popup, press `a` in the
+terminal app, or run:
+
 ```bash
 claude-usage report
 ```
 
-This writes `~/.cache/claude-usage/report.html` and opens it. It shows:
+It takes a few seconds, writes `~/.cache/claude-usage/report.html` and opens
+it in your browser. It shows:
 
 - **5-hour and weekly windows**: how each window filled up over time, split
   by chat, with the real `/usage` percentage drawn on top. Hover for the
@@ -203,7 +208,10 @@ API-equivalent dollars.
 
 **What it can't see.** claude.ai chats, the desktop app, Claude Code on the
 web and other computers count against the same limits but leave no
-transcripts here. The window charts show that part as the gap between the
+transcripts here. (A Claude Code on the web session keeps its transcript in
+its own cloud machine: ask it to run
+`python3 claude-usage/claude_usage.py report --no-open` there and send you
+the page.) The window charts show that part as the gap between the
 measured line and the colored area, and the calibration gives each window
 its own offset for it, so it doesn't inflate the per-token rate.
 
@@ -213,7 +221,9 @@ its own offset for it, so it doesn't inflate the per-token rate.
 
 The top-bar icon shows two mini bars: the 5h session on top and the week
 below. Next to them are both percentages. Click it for the popup: every
-limit, a live countdown, day ticks on the weekly bars and the pace note.
+limit, a live countdown, day ticks on the weekly bars and the pace note, and
+**What used my limits?**, which builds the [report](#what-used-my-limits) and
+opens it in your browser.
 
 Install it for your user:
 
@@ -231,7 +241,8 @@ Notes:
   (Ubuntu 26.04), but those versions are untested. If it doesn't show up
   after an upgrade, run `journalctl -o cat -b /usr/bin/gnome-shell | grep -i claude`
   to see why.
-- It needs nothing beyond GNOME itself: no Python, no extra packages. It
+- It needs nothing beyond GNOME itself: no extra packages, and Python only
+  for **What used my limits?** (Ubuntu has it). It
   reads the same login and calls the same endpoint as the terminal app, and
   it shares the cache in `~/.cache/claude-usage/`. The terminal app and the
   extension can run side by side without doubling the requests.

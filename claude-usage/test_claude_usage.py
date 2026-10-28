@@ -2,6 +2,7 @@
 
 import json
 import os
+import subprocess
 import tempfile
 import threading
 import time
@@ -135,6 +136,23 @@ class FormatTests(unittest.TestCase):
         b = cu.bar(50, 0.25, 40, cu.Style(False))
         self.assertEqual(len(b), 40)
         self.assertEqual(b.index("┃"), 10)
+
+
+class ReportKeyTests(unittest.TestCase):
+    def test_report_runs_in_background_and_reports_failure(self):
+        state = cu.State()
+        real = subprocess.Popen
+        fake = lambda *a, **kw: real(["sh", "-c", "echo 'claude-usage report: no transcripts' >&2; exit 1"], **kw)
+        with mock.patch.object(cu.subprocess, "Popen", side_effect=fake) as popen:
+            state.start_report()
+            state.start_report()  # already running: not started twice
+        self.assertEqual(popen.call_count, 1)
+        self.assertEqual(popen.call_args.args[0][-1], "report")
+        self.assertIn("Building the report", state.note)
+        state.report_proc.wait()
+        state.check_report()
+        self.assertIsNone(state.report_proc)
+        self.assertEqual(state.note, "report: claude-usage report: no transcripts")
 
 
 class CompactTests(unittest.TestCase):

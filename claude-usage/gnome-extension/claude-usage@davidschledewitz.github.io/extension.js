@@ -10,6 +10,8 @@
 // /usage in Claude Code, using the login Claude Code stores in
 // ~/.claude/.credentials.json (read-only). It shares a cache with the
 // claude-usage terminal tool, so running both doesn't double the requests.
+// "What used my limits?" runs `claude-usage report` (installed alongside)
+// and opens its page in the browser.
 
 import Clutter from 'gi://Clutter';
 import GLib from 'gi://GLib';
@@ -68,6 +70,7 @@ class UsageError extends Error {
 
 const NO_LOGIN = 'No Claude Code login found. The desktop app\'s login can\'t be read by other programs.';
 const LOGIN_TIMEOUT = 10 * 60; // seconds to wait for the browser login
+const REPORT_LABEL = 'What used my limits? (opens your browser)';
 
 /** Claude Code's command. The desktop session's PATH may lack ~/.local/bin. */
 function findClaude() {
@@ -80,6 +83,20 @@ function findClaude() {
             return path;
     }
     return null;
+}
+
+/**
+ * Command for `claude-usage report`: the copy installed with this extension
+ * (same version as the extension), else the claude-usage command.
+ */
+function reportCommand(extPath) {
+    const python = GLib.find_program_in_path('python3');
+    const script = GLib.build_filenamev([extPath, 'claude_usage.py']);
+    if (python && GLib.file_test(script, GLib.FileTest.EXISTS))
+        return [python, script, 'report'];
+    const cmd = GLib.find_program_in_path('claude-usage') ??
+        [`${GLib.get_home_dir()}/.local/bin/claude-usage`].find(p => GLib.file_test(p, GLib.FileTest.IS_EXECUTABLE));
+    return cmd ? [cmd, 'report'] : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -509,8 +526,9 @@ function paintBar(cr, x, y, w, h, fg, {pct, elapsed = null, segments = 0, marker
 
 const Indicator = GObject.registerClass(
 class ClaudeUsageIndicator extends PanelMenu.Button {
-    _init() {
+    _init(extPath) {
         super._init(0.5, 'Claude usage');
+        this._extPath = extPath;
 
         const box = new St.BoxLayout({style_class: 'panel-status-menu-box'});
         this._icon = new St.DrawingArea({style_class: 'claude-usage-icon', y_align: Clutter.ActorAlign.CENTER});
@@ -530,6 +548,9 @@ class ClaudeUsageIndicator extends PanelMenu.Button {
         this._loginItem.connect('activate', () => this._source.login());
         this._loginItem.visible = false;
         this.menu.addMenuItem(this._loginItem);
+        this._reportItem = new PopupMenu.PopupMenuItem(REPORT_LABEL);
+        this._reportItem.connect('activate', () => this._openReport());
+        this.menu.addMenuItem(this._reportItem);
         const refresh = new PopupMenu.PopupMenuItem('Refresh now');
         refresh.connect('activate', () => this._source.refresh());
         this.menu.addMenuItem(refresh);
@@ -558,11 +579,45 @@ class ClaudeUsageIndicator extends PanelMenu.Button {
             this._source.login();
     }
 
-    /** One notification per expired login, with a button for the browser login. */
-    _notifyLogin() {
-        if (this._loginNotified)
+    /** Build the usage report in the background; it opens in the browser. */
+    _openReport() {
+        if (this._reportProc)
             return;
-        this._loginNotified = true;
+        const cmd = reportCommand(this._extPath);
+        if (!cmd) {
+            this._notify('Couldn\'t build the usage report', 'It needs Python 3. Install it with: sudo apt install python3');
+            return;
+        }
+        let proc;
+        try {
+            proc = Gio.Subprocess.new(cmd, Gio.SubprocessFlags.STDOUT_SILENCE | Gio.SubprocessFlags.STDERR_PIPE);
+        } catch (e) {
+            this._notify('Couldn\'t build the usage report', e.message);
+            return;
+        }
+        this._reportProc = proc;
+        this._reportItem.label.text = 'Building the report…';
+        this._reportItem.setSensitive(false);
+        proc.communicate_utf8_async(null, null, (p, res) => {
+            let stderr = '';
+            try {
+                [, , stderr] = p.communicate_utf8_finish(res);
+            } catch (e) {
+                stderr = e.message;
+            }
+            this._reportProc = null;
+            if (!this._source)
+                return; // disabled meanwhile
+            this._reportItem.label.text = REPORT_LABEL;
+            this._reportItem.setSensitive(true);
+            if (!p.get_successful()) {
+                const lines = (stderr ?? '').trim().split('\n');
+                this._notify('Couldn\'t build the usage report', lines[lines.length - 1].replace(/^claude-usage report: /, ''));
+            }
+        });
+    }
+
+    _notifSourceOrNew() {
         if (!this._notifSource) {
             this._notifSource = new MessageTray.Source({title: 'Claude usage', iconName: 'dialog-password-symbolic'});
             this._notifSource.connect('destroy', () => {
@@ -570,6 +625,20 @@ class ClaudeUsageIndicator extends PanelMenu.Button {
             });
             Main.messageTray.add(this._notifSource);
         }
+        return this._notifSource;
+    }
+
+    _notify(title, body) {
+        const source = this._notifSourceOrNew();
+        source.addNotification(new MessageTray.Notification({source, title, body}));
+    }
+
+    /** One notification per expired login, with a button for the browser login. */
+    _notifyLogin() {
+        if (this._loginNotified)
+            return;
+        this._loginNotified = true;
+        this._notifSourceOrNew();
         const notification = new MessageTray.Notification({
             source: this._notifSource,
             title: 'Claude login expired',
@@ -780,7 +849,7 @@ class ClaudeUsageIndicator extends PanelMenu.Button {
 
 export default class ClaudeUsageExtension extends Extension {
     enable() {
-        this._indicator = new Indicator();
+        this._indicator = new Indicator(this.path);
         Main.panel.addToStatusArea(this.uuid, this._indicator);
     }
 
