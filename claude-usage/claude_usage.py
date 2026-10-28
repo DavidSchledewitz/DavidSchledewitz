@@ -7,13 +7,14 @@ your machine and asks the same endpoint the `/usage` command in Claude Code
 uses. No third-party dependencies.
 
 Modes:
-    claude-usage            live dashboard (q to quit, r to refresh)
+    claude-usage            live dashboard (q to quit, r to refresh, a for the report)
     claude-usage --compact  small live dashboard (also automatic in narrow windows)
     claude-usage --window   open the small dashboard in its own terminal window
     claude-usage --once     print the dashboard once and exit
     claude-usage --line     one compact line, for tmux / status bars
     claude-usage --json     raw JSON from the API
     claude-usage --login    log in again via Claude Code (opens your browser)
+    claude-usage report     what used your limits, per chat and per prompt (HTML)
 
 An expired login is renewed the way Claude Code renews it and written back to
 Claude Code's credentials file, so a browser login is rarely needed. Turn that
@@ -593,8 +594,10 @@ def render(state: "State", now: datetime, width: int, st: Style, live: bool) -> 
         footer.append(f"updated {fmt_duration(max(0, time.time() - state.fetched_at))} ago")
     if live and state.next_fetch:
         footer.append(f"next in {fmt_duration(max(0, state.next_fetch - time.time()))}")
-        footer.append("[r] refresh  [q] quit")
+        footer.append("[r] refresh  [a] usage report  [q] quit")
     lines.append(st(" " + " · ".join(footer), "90"))
+    if state.note:
+        lines.append(st(f" {state.note}", "36"))
     if state.login_proc is not None:
         lines.append(st(" Waiting for you to log in in the browser…", "36"))
     elif state.error:
@@ -690,11 +693,76 @@ def read_cache(max_age: float) -> tuple[dict, float] | None:
 
 
 def write_cache(data: dict, fetched_at: float) -> None:
+    """Called after every fresh fetch, so it also logs the reading."""
     path = cache_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps({"fetched_at": fetched_at, "data": data}))
+        tmp.replace(path)
+    except OSError:
+        pass
+    append_history(data, fetched_at)
+
+
+def history_path() -> Path:
+    base = os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share"
+    return Path(base) / "claude-usage" / "history.jsonl"
+
+
+def history_line(data: dict, fetched_at: float) -> str | None:
+    """One reading as a line of history.jsonl. The top-bar extension writes
+    the same format (usage.js historyLine)."""
+    limits = {key: {"pct": val.get("utilization"), "resets_at": val.get("resets_at")}
+              for key, val in data.items()
+              if isinstance(val, dict) and "utilization" in val and key != "extra_usage"}
+    if not limits:
+        return None
+    return json.dumps({"t": round(fetched_at, 1), "limits": limits}, separators=(",", ":"))
+
+
+HISTORY_DAYS = 90  # readings kept; the report looks back 35 days
+
+
+def append_history(data: dict, fetched_at: float) -> None:
+    """Keep every reading, so `claude-usage report` can calibrate token counts
+    against the real percentages. About 40 KB a day, at most 90 days of it."""
+    line = history_line(data, fetched_at)
+    if line is None:
+        return
+    path = history_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(line + "\n")  # one short write, so the two apps never interleave lines
+    except OSError:
+        return
+    prune_history(fetched_at)
+
+
+def prune_history(now: float) -> None:
+    """Drop readings older than HISTORY_DAYS. Only rewrites the file when the
+    oldest reading is a week past that, so about once a week."""
+    path = history_path()
+    try:
+        with open(path, encoding="utf-8") as f:
+            first = json.loads(f.readline())["t"]
+        if float(first) >= now - (HISTORY_DAYS + 7) * DAY:
+            return
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, ValueError, KeyError, TypeError):
+        return
+    cutoff = now - HISTORY_DAYS * DAY
+    keep = []
+    for line in lines:
+        try:
+            if float(json.loads(line)["t"]) >= cutoff:
+                keep.append(line + "\n")
+        except (ValueError, KeyError, TypeError):
+            continue
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text("".join(keep), encoding="utf-8")
         tmp.replace(path)
     except OSError:
         pass
@@ -711,6 +779,8 @@ class State:
     login_needed: bool = False
     login_proc: subprocess.Popen | None = None
     login_started: float = 0.0
+    report_proc: subprocess.Popen | None = None
+    note: str | None = None  # one-off message, e.g. from the report
 
     def start_login(self) -> None:
         """Run Claude Code's browser login in the background (live mode)."""
@@ -741,6 +811,22 @@ class State:
             self.next_fetch = 0
         else:
             self.error = "The login didn't complete. Press l to try again."
+
+    def start_report(self) -> None:
+        """Build `claude-usage report` in the background; it opens in the browser."""
+        if self.report_proc is None:
+            self.report_proc = subprocess.Popen(
+                [sys.executable, os.path.realpath(__file__), "report"], stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, start_new_session=True)
+            self.note = "Building the report… it opens in your browser."
+
+    def check_report(self) -> None:
+        if self.report_proc is None or self.report_proc.poll() is None:
+            return
+        err = self.report_proc.stderr.read().strip().splitlines()
+        self.report_proc.stderr.close()
+        self.note = None if self.report_proc.returncode == 0 else f"report: {err[-1] if err else 'failed'}"
+        self.report_proc = None
 
     def refresh(self, interval: float) -> None:
         try:
@@ -825,6 +911,7 @@ def run_live(interval: float, st: Style, compact: bool = False) -> None:
     with Terminal() as term:
         while True:
             state.check_login()
+            state.check_report()
             if time.time() >= state.next_fetch and state.login_proc is None:
                 state.refresh(interval)
             cols = shutil.get_terminal_size((80, 24)).columns
@@ -838,6 +925,8 @@ def run_live(interval: float, st: Style, compact: bool = False) -> None:
                 return
             if key in ("r", "R"):
                 state.next_fetch = 0
+            if key in ("a", "A"):
+                state.start_report()
             if key in ("l", "L") and state.login_needed:
                 state.start_login()
 
@@ -875,9 +964,14 @@ def open_window(zoom: float, passthrough: list[str]) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["report"]:
+        import claude_usage_report
+        return claude_usage_report.main(argv[1:])
     p = argparse.ArgumentParser(
         prog="claude-usage",
         description="Live view of your Claude plan usage: 5h session, weekly limits, time to reset.",
+        epilog="`claude-usage report` shows what used your limits, per chat and per prompt.",
     )
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("--once", action="store_true", help="print the dashboard once and exit")

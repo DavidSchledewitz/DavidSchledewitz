@@ -13,4 +13,4 @@ dependencies = []
 claude-usage = "claude_usage:main"
 
 [tool.setuptools]
-py-modules = ["claude_usage"]
+py-modules = ["claude_usage", "claude_usage_report"]

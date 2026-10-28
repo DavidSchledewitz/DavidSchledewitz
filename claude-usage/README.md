@@ -8,6 +8,10 @@ resets. It comes in two forms:
 - **A GNOME top-bar extension**: an indicator next to the clock and wifi, with
   a popup. See [GNOME top bar](#gnome-top-bar-ubuntu).
 
+**Usage Report** (in the top-bar popup, `a` in the terminal app, or
+`claude-usage report`) shows what used up your limits, per chat and per
+prompt, and why. See [What used my limits?](#what-used-my-limits).
+
 This is a beta built on an undocumented Anthropic endpoint, so it can
 break without notice.
 
@@ -106,12 +110,13 @@ How to read it:
 
 | Command | What it does |
 |---|---|
-| `claude-usage` | Live dashboard. Polls every 5 min and ticks every second. `r` refreshes, `q` quits. |
+| `claude-usage` | Live dashboard. Polls every 5 min and ticks every second. `r` refreshes, `a` opens the [report](#what-used-my-limits), `q` quits. |
 | `claude-usage -c`, `--compact` | Small live dashboard (about 42×6). It's used automatically when the window is under 50 columns. |
 | `claude-usage -w`, `--window` | Opens the compact dashboard in its own small GNOME Terminal window, zoomed out to 0.8 and without a menu bar. |
 | `claude-usage --once` | Prints the dashboard once (add `-c` for the small one). |
 | `claude-usage --line` | Prints one line, e.g. `5h 62% (1h47m) · wk 34% (4d5h)` |
 | `claude-usage --json` | Prints the raw API response. |
+| `claude-usage report` | What used your limits, per chat and per prompt, as a page in your browser. See [What used my limits?](#what-used-my-limits). |
 | `claude-usage --login` | Logs in again with Claude Code's own login (`claude auth login`), which opens your browser. In the live view, `l` does the same when the login has expired. |
 | `--zoom 0.7` | Font scale for `--window` (1.0 = normal). |
 | `-i 600`, `--interval 600` | Seconds between polls in live mode (default 300, minimum 60). |
@@ -154,13 +159,81 @@ set -g status-right '#(claude-usage --line)'
 { "statusLine": { "type": "command", "command": "claude-usage --line" } }
 ```
 
+## What used my limits?
+
+Click **Usage Report** in the top-bar popup, press `a` in the
+terminal app, or run:
+
+```bash
+claude-usage report
+```
+
+It takes a few seconds, writes `~/.cache/claude-usage/report.html` and opens
+it in your browser. It shows:
+
+- **5-hour and weekly windows**: how each window filled up over time, split
+  by chat, with the real `/usage` percentage drawn on top. Hover for the
+  numbers at any moment, click a band to open that chat.
+- **Chats**: which chats used the most in the selected window, the week, or
+  everything, and what kind of usage it was.
+- **One chat**: how fast it used your limit (with 5h resets marked), and every
+  prompt with its share, the tools it ran, the context size of each call and
+  the reasons it was expensive, e.g. *"46 model calls, each re-reading the
+  conversation (~240k tokens)"*, *"cache expired after 2h 10m idle: the whole
+  conversation was cached again"*, *"4 subagents: each starts its own
+  context"*, *"106k tokens written, 43k of it thinking"*.
+
+Amounts are shown as **% of the 5-hour window** by default; the switch at
+the top changes everything to % of the week or API-equivalent dollars. The
+terminal prints a short summary too. Options: `--days 35` (how far back),
+`-o FILE`, `--no-open`, `--no-fetch`, `--json`.
+
+**Why one prompt can cost more than twenty.** Every step of a prompt (each
+tool call) sends the whole conversation to the model again. Twenty short
+questions in fresh chats are cheap; one long agentic prompt deep into a big
+chat repeats a large context dozens of times. Coming back to a chat after the
+cache expired (5 min or 1 h) pays to cache the whole conversation again.
+Subagents each build their own context. And output, thinking included, costs
+5x as much as input per token.
+
+**How the percentages work.** Claude Code saves every model call with its
+token counts in `~/.claude/projects`. Anthropic doesn't publish how tokens
+turn into percent of your limits, so the report learns it: the terminal app
+and the top bar log every usage reading to
+`~/.local/share/claude-usage/history.jsonl` (about 40 KB a day; readings
+older than 90 days are deleted, so it stays under ~10 MB). The report page is
+rewritten on every run, so it doesn't pile up either. A reading
+says "X% used since this window started"; the transcripts say which tokens
+were used in the same time. Fitting the two gives "percent per token",
+weighted by model and token type using API prices. One reading is enough for
+a rough number; it gets better the longer the top bar or `claude-usage` runs.
+The report page shows the typical error. Without any readings, amounts are
+API-equivalent dollars.
+
+**What it covers.** Claude Code on this computer (terminal, IDE, the
+desktop app's Code tab) and the desktop app's **Cowork** sessions, which it
+finds in the app's data folder (`~/.config/Claude/local-agent-mode-sessions`
+on Linux, `~/Library/Application Support/Claude/...` on macOS,
+`%APPDATA%\Claude\...` on Windows).
+
+**What it can't break down.** claude.ai chats, the desktop app's chat, the
+phone and other computers count against the same limits, but those
+conversations are kept on Anthropic's servers, not here. Their total still
+shows up: the window charts draw it as a gray **Elsewhere** band, the part of
+the measured readings that local usage doesn't explain (beyond the
+calibration error). The calibration also gives each window its own offset for
+it, so it doesn't inflate the per-token rate. Claude Code on the web runs on
+separate cloud credits, not on these limits.
+
 ## GNOME top bar (Ubuntu)
 
 <img src="gnome-extension/screenshot.png" width="375" alt="Top-bar indicator with the usage popup open">
 
 The top-bar icon shows two mini bars: the 5h session on top and the week
 below. Next to them are both percentages. Click it for the popup: every
-limit, a live countdown, day ticks on the weekly bars and the pace note.
+limit, a live countdown, day ticks on the weekly bars and the pace note, and
+**Usage Report**, which builds the [report](#what-used-my-limits) and
+opens it in your browser.
 
 Install it for your user:
 
@@ -178,7 +251,8 @@ Notes:
   (Ubuntu 26.04), but those versions are untested. If it doesn't show up
   after an upgrade, run `journalctl -o cat -b /usr/bin/gnome-shell | grep -i claude`
   to see why.
-- It needs nothing beyond GNOME itself: no Python, no extra packages. It
+- It needs nothing beyond GNOME itself: no extra packages, and Python only
+  for **Usage Report** (Ubuntu has it). It
   reads the same login and calls the same endpoint as the terminal app, and
   it shares the cache in `~/.cache/claude-usage/`. The terminal app and the
   extension can run side by side without doubling the requests.
@@ -225,5 +299,6 @@ Things to know:
 
 ```bash
 python3 -m unittest -v test_claude_usage     # terminal app, includes a fake-server end-to-end run
+python3 -m unittest -v test_claude_usage_report   # report: transcripts, calibration, page
 gjs -m gnome-extension/tests/test_usage.js   # extension's parsing/pace logic
 ```

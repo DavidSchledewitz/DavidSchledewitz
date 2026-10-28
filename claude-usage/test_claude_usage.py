@@ -2,6 +2,7 @@
 
 import json
 import os
+import subprocess
 import tempfile
 import threading
 import time
@@ -50,6 +51,31 @@ class ParseTests(unittest.TestCase):
         derived = cu.parse_extra({"extra_usage": {"is_enabled": True, "monthly_limit": 100000,
                                                   "used_credits": 0.0, "utilization": None}})
         self.assertEqual(derived.pct, 0.0)
+
+    def test_history(self):
+        line = cu.history_line(SAMPLE, 1760616000.04)
+        self.assertEqual(json.loads(line), {"t": 1760616000.0, "limits": {
+            k: {"pct": v["utilization"], "resets_at": v["resets_at"]}
+            for k, v in SAMPLE.items() if k != "extra_usage"}})
+        self.assertIsNone(cu.history_line({"extra_usage": {"is_enabled": False}}, 1))
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}):
+            cu.append_history(SAMPLE, 1)
+            cu.append_history(SAMPLE, 2)
+            lines = cu.history_path().read_text().splitlines()
+        self.assertEqual([json.loads(l)["t"] for l in lines], [1, 2])
+
+    def test_history_keeps_90_days(self):
+        day = 86400
+        now = 200 * day
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}):
+            times = lambda: [json.loads(l)["t"] for l in cu.history_path().read_text().splitlines()]
+            for t in (now - 120 * day, now - 95 * day, now - 89 * day):
+                cu.append_history(SAMPLE, t)
+            self.assertEqual(len(times()), 3)  # nothing 97+ days older than the newest yet
+            cu.append_history(SAMPLE, now)  # now the first is 120 days old: cut to 90 days
+            self.assertEqual(times(), [now - 89 * day, now])
+            cu.append_history(SAMPLE, now + 60)  # nothing old enough: just appended
+            self.assertEqual(len(times()), 3)
 
     def test_cloud_credits(self):
         cloud = [l for l in cu.parse_limits(SAMPLE) if l.key == "iguana_necktie"][0]
@@ -123,6 +149,23 @@ class FormatTests(unittest.TestCase):
         b = cu.bar(50, 0.25, 40, cu.Style(False))
         self.assertEqual(len(b), 40)
         self.assertEqual(b.index("┃"), 10)
+
+
+class ReportKeyTests(unittest.TestCase):
+    def test_report_runs_in_background_and_reports_failure(self):
+        state = cu.State()
+        real = subprocess.Popen
+        fake = lambda *a, **kw: real(["sh", "-c", "echo 'claude-usage report: no transcripts' >&2; exit 1"], **kw)
+        with mock.patch.object(cu.subprocess, "Popen", side_effect=fake) as popen:
+            state.start_report()
+            state.start_report()  # already running: not started twice
+        self.assertEqual(popen.call_count, 1)
+        self.assertEqual(popen.call_args.args[0][-1], "report")
+        self.assertIn("Building the report", state.note)
+        state.report_proc.wait()
+        state.check_report()
+        self.assertIsNone(state.report_proc)
+        self.assertEqual(state.note, "report: claude-usage report: no transcripts")
 
 
 class CompactTests(unittest.TestCase):
@@ -207,7 +250,8 @@ class EndToEndTests(unittest.TestCase):
         expires = int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp() * 1000)
         (cfg / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {
             "accessToken": "good-token", "expiresAt": expires, "subscriptionType": "max"}}))
-        env = {"CLAUDE_CONFIG_DIR": str(cfg), "XDG_CACHE_HOME": str(Path(self.tmp.name) / "cache")}
+        env = {"CLAUDE_CONFIG_DIR": str(cfg), "XDG_CACHE_HOME": str(Path(self.tmp.name) / "cache"),
+               "XDG_DATA_HOME": str(Path(self.tmp.name) / "data")}
         self.env = mock.patch.dict(os.environ, env)
         self.env.start()
         os.environ.pop("CLAUDE_CODE_OAUTH_TOKEN", None)

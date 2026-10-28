@@ -75,6 +75,22 @@ export function parseExtra(data) {
     return pct === null ? null : {pct, used, limit};
 }
 
+/**
+ * One reading as a line of history.jsonl, which `claude-usage report` uses to
+ * calibrate token counts against the real percentages. Same format as
+ * history_line in claude_usage.py. Null if the reply has no limits.
+ */
+export function historyLine(data, fetchedAt) {
+    const limits = {};
+    for (const [key, val] of Object.entries(data ?? {})) {
+        if (val && typeof val === 'object' && 'utilization' in val && key !== 'extra_usage')
+            limits[key] = {pct: val.utilization, resets_at: val.resets_at ?? null};
+    }
+    if (!Object.keys(limits).length)
+        return null;
+    return JSON.stringify({t: Math.round(fetchedAt * 10) / 10, limits});
+}
+
 export function fmtMoney(cents) {
     return `$${(cents / 100).toFixed(2)}`;
 }
