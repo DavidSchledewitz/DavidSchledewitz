@@ -235,6 +235,33 @@ class EndToEndTests(unittest.TestCase):
         self.assertIsNotNone(data["fit"]["five_hour"])
         self.assertTrue(any(w[2] for w in data["windows"]["five_hour"]))
 
+    def test_reading_cached_by_the_top_bar_is_used(self):
+        # An older top bar cached a fresh reading without logging it.
+        cu.history_path().unlink()
+        week = iso(self.now + 3 * 86400)
+        cache = cu.cache_path()
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(json.dumps({"fetched_at": self.now - 60, "data": {
+            "five_hour": {"utilization": 0.0, "resets_at": None},
+            "seven_day": {"utilization": 12.0, "resets_at": week}}}))
+        with mock.patch("sys.stdout"), mock.patch.object(cu, "get_usage") as fetch:
+            self.assertEqual(rep.main(["--no-open"]), 0)
+            self.assertEqual(rep.main(["--no-open"]), 0)  # logged once, not twice
+        fetch.assert_not_called()
+        self.assertEqual(len(cu.history_path().read_text().splitlines()), 1)
+        data = json.loads(cu.cache_path().with_name("report.html").read_text()
+                          .split("const D = ", 1)[1].split(";\nconst NS", 1)[0])
+        self.assertIsNotNone(data["fit"]["seven_day"])
+        self.assertIsNone(data["fit"]["five_hour"])
+        self.assertIn("No usable reading yet", data["notes"]["five_hour"])
+
+    def test_fetch_problem_is_shown_on_the_page(self):
+        with mock.patch("sys.stdout"), \
+                mock.patch.object(cu, "get_usage", side_effect=cu.UsageError("HTTP 429: rate limited")):
+            self.assertEqual(rep.main(["--no-open"]), 0)
+        page = cu.cache_path().with_name("report.html").read_text()
+        self.assertIn('"warning":"HTTP 429: rate limited"', page)
+
     def test_dispatch_from_claude_usage(self):
         with mock.patch.object(rep, "main", return_value=0) as m:
             self.assertEqual(cu.main(["report", "--days", "3"]), 0)

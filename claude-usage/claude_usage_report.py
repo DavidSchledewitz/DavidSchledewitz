@@ -579,7 +579,22 @@ def calibrate(requests: list, readings: dict) -> dict:
 # report
 
 
-def build(days: float, now: float, readings: dict, plan: str | None, dirs=None) -> dict:
+def fit_notes(fits: dict, readings: dict) -> dict:
+    """Why a limit has no calibration yet, for the page."""
+    notes = {}
+    for key, label in (("five_hour", "5-hour window"), ("seven_day", "week")):
+        if fits.get(key):
+            continue
+        if not any(readings.values()):
+            notes[key] = "No usage reading yet. The top bar takes one every 5 minutes; running the report takes one too."
+        else:
+            notes[key] = (f"No usable reading yet: each one so far was taken when no {label} was running or "
+                          f"this computer's Claude Code had used under 1% of it. The next reading during a {label} you use "
+                          f"Claude Code in fixes that.")
+    return notes
+
+
+def build(days: float, now: float, readings: dict, plan: str | None, dirs=None, warning: str | None = None) -> dict:
     since = now - days * DAY
     sessions = load_sessions(since, dirs)
     home = str(Path.home())
@@ -608,9 +623,10 @@ def build(days: float, now: float, readings: dict, plan: str | None, dirs=None) 
         rows.append(info)
     reqs.sort()
     times = [r.t for r in all_requests]
+    fits = calibrate(all_requests, readings)
     return {
-        "generated": now, "days": days, "plan": plan,
-        "fit": calibrate(all_requests, readings),
+        "generated": now, "days": days, "plan": plan, "warning": warning,
+        "fit": fits, "notes": fit_notes(fits, readings),
         "readings": {k: [[round(t, 1), p, r] for t, p, r in v if t >= since] for k, v in readings.items()},
         "windows": {k: windows_for(k, times, [x for x in readings[k] if x[2] > since], now) for k in WINDOWS},
         "sessions": rows,
@@ -619,10 +635,28 @@ def build(days: float, now: float, readings: dict, plan: str | None, dirs=None) 
     }
 
 
+def log_once(data: dict, fetched_at: float) -> None:
+    """Put a cached reading into history.jsonl unless it's there already
+    (versions before the report cached readings without logging them)."""
+    try:
+        tail = cu.history_path().read_text(encoding="utf-8").splitlines()[-20:]
+    except OSError:
+        tail = []
+    for line in tail:
+        try:
+            if abs(float(json.loads(line)["t"]) - fetched_at) < 1:
+                return
+        except (ValueError, KeyError, TypeError):
+            continue
+    cu.append_history(data, fetched_at)
+
+
 def current_reading(fetch: bool) -> tuple[dict | None, str | None, str | None]:
-    """Latest usage reading (fetched now unless the cache is fresh) and plan."""
+    """Latest usage reading (fetched now unless the cache is fresh), plan, and
+    a warning if it couldn't be read. Either way it ends up in the history."""
     cached = cu.read_cache(300)
     if cached:
+        log_once(*cached)
         return cached[0], None, None
     if not fetch:
         return None, None, None
@@ -697,7 +731,7 @@ def main(argv: list[str] | None = None) -> int:
         plan = plan or cu.load_credentials().plan
     except cu.UsageError:
         pass
-    data = build(args.days, now, load_readings(), plan)
+    data = build(args.days, now, load_readings(), plan, warning=warn)
     if args.json:
         print(json.dumps(data, indent=1))
         return 0
@@ -829,7 +863,8 @@ details p, details li { color: var(--ink2); }
 <body>
 <main>
   <div class="head" style="margin:0">
-    <div><h1>Claude usage report</h1><div class="sub" id="gen"></div></div>
+    <div><h1>Claude usage report</h1><div class="sub" id="gen"></div>
+      <div class="caption" id="warning" hidden></div></div>
     <div class="controls"><span class="muted small">Show as</span>
       <div class="seg" id="units" role="group" aria-label="Show amounts as"></div></div>
   </div>
@@ -897,8 +932,9 @@ const store = {
 let unit = store.get("cu-unit");
 if (!UNITS[unit] || (unit !== "usd" && !UNITS[unit].fit))
   unit = D.fit.five_hour ? "h5" : D.fit.seven_day ? "wk" : "usd";
-// The unit for one limit's own chart: its own percent, unless dollars are chosen.
-const chartUnit = key => unit === "usd" || !D.fit[key] ? "usd" : LIMIT_UNIT[key];
+// The unit for one limit's own chart: its own percent, else the chosen one
+// (a 5h window in % of the week while only the week is calibrated).
+const chartUnit = key => unit === "usd" ? "usd" : D.fit[key] ? LIMIT_UNIT[key] : unit;
 
 // ---------------------------------------------------------------- helpers
 function h(tag, attrs = {}, ...kids) {
@@ -1173,7 +1209,7 @@ function renderWindow(key) {
   const layerOf = r => { const i = top.indexOf(r[1]); return i >= 0 ? i : layers.length - 1; };
   const tEnd = Math.max(w.s + 60, Math.min(w.e, D.generated));
   const {grid, values} = cumulate(w.reqs, w.s, tEnd, layers.length, layerOf, u);
-  const measured = u === "usd" ? [] : w.readings;
+  const measured = u === LIMIT_UNIT[key] ? w.readings : [];  // readings only on their own scale
   const total = k => layers.reduce((a, _, L) => a + values[L][k], 0);
 
   const chart = h("div", {class: "chart"});
@@ -1209,6 +1245,9 @@ function renderWindow(key) {
     cap = `${fmt(est, u)} API-equivalent in this window. Percentages appear once there is a usage reading (run claude-usage or the top bar).`;
   else if (u === "usd")
     cap = `${fmt(est, u)} API-equivalent from local Claude Code in this window.`;
+  else if (u !== LIMIT_UNIT[key])
+    cap = `About ${fmt(est, u)} of your week from local Claude Code in this window. ` +
+      `It's shown in ${UNITS[u].label} because the ${key === "five_hour" ? "5-hour window" : "week"} isn't calibrated yet.`;
   else if (lastM) {
     const at = valueAt(grid.map((_, k) => total(k)), grid, lastM[0]);
     const elsewhere = Math.max(0, lastM[1] - at);
@@ -1241,7 +1280,7 @@ function renderTiles() {
     const last = (D.readings[key] || []).slice(-1)[0];
     if (!last || last[2] <= now) {
       const w = D.windows[key].find(([s, e]) => s <= now && now < e);
-      if (!D.fit[key]) tiles.append(tile(label, "—", "no usage reading logged yet"));
+      if (!D.fit[key]) tiles.append(tile(label, "—", D.notes[key] && D.notes[key].startsWith("No usable") ? "no usable reading yet" : "no usage reading logged yet"));
       else if (!w) tiles.append(tile(label, "0%", "no usage in the current window"));
       else tiles.append(tile(label, "~" + fmt(reqsIn(w[0], now).reduce((a, r) => a + reqVal(r, LIMIT_UNIT[key]), 0), LIMIT_UNIT[key]),
         "estimated from local Claude Code; no reading in this window"));
@@ -1252,7 +1291,8 @@ function renderTiles() {
       `read ${fmtDur(now - t)} ago`));
   }
   const f5 = D.fit.five_hour, f7 = D.fit.seven_day;
-  if (f5 || f7) {
+  const missing = ["five_hour", "seven_day"].filter(k => D.notes[k]).map(k => (k === "five_hour" ? "% of 5h: " : "% of week: ") + D.notes[k]);
+  if (f5 && f7) {
     const f = f5 || f7;
     if (f.n < 3)  // one or two points always fit themselves: no error estimate yet
       tiles.append(tile("Calibration", "rough", `from ${f.n} usage reading${f.n === 1 ? "" : "s"} so far`,
@@ -1261,9 +1301,10 @@ function renderTiles() {
       tiles.append(tile("Calibration", `±${Math.max(1, Math.round(f.err))} pts`,
         `typical error of the ${f5 ? "5h" : "weekly"} estimate, fitted on ${f.n} readings`,
         `local Claude Code explains ~${Math.round(100 * Math.min(1, f.explained))}% of what was measured`));
+  } else if (f5 || f7) {
+    tiles.append(tile("Calibration", "partly", `% of ${f5 ? "5h" : "week"} works`, ...missing));
   } else {
-    tiles.append(tile("Calibration", "not yet", "needs a usage reading: run claude-usage or the top bar on this computer",
-      "until then amounts are API-equivalent dollars"));
+    tiles.append(tile("Calibration", "not yet", ...missing, "until then amounts are API-equivalent dollars"));
   }
 }
 
@@ -1289,7 +1330,7 @@ function renderUnits() {
   const box = document.getElementById("units");
   box.replaceChildren(...Object.entries(UNITS).map(([k, x]) =>
     h("button", {"aria-pressed": String(k === unit), disabled: k !== "usd" && !x.fit,
-      title: k !== "usd" && !x.fit ? "Needs a usage reading: run claude-usage or the top bar on this computer" : null,
+      title: k !== "usd" && !x.fit ? D.notes[k === "h5" ? "five_hour" : "seven_day"] : null,
       onclick: () => { unit = k; store.set("cu-unit", k); renderAll(); }}, x.label)));
   document.getElementById("kinds").replaceChildren(...KINDS.map(([, l, c]) => h("span", {}, h("i", {class: "sw", style: `background:${c}`}), l)));
 }
@@ -1457,6 +1498,11 @@ function renderAll() {
 document.getElementById("gen").textContent =
   `Generated ${fmtDT(D.generated)}${D.plan ? " · " + D.plan.charAt(0).toUpperCase() + D.plan.slice(1) + " plan" : ""} · ` +
   `${D.sessions.length} Claude Code chat${D.sessions.length === 1 ? "" : "s"} from the last ${D.days} days on this computer`;
+if (D.warning) {
+  const w = document.getElementById("warning");
+  w.textContent = "⚠ Couldn't read your current usage: " + D.warning;
+  w.hidden = false;
+}
 renderTiles();
 renderAll();
 let rt = 0;
