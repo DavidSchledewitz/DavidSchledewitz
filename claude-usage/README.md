@@ -183,7 +183,9 @@ it in your browser. It shows:
   conversation was cached again"*, *"4 subagents: each starts its own
   context"*, *"106k tokens written, 43k of it thinking"*.
 
-The terminal prints a short summary too. Options: `--days 35` (how far back),
+Amounts are shown as **% of the 5-hour window** by default; the switch at
+the top changes everything to % of the week or API-equivalent dollars. The
+terminal prints a short summary too. Options: `--days 35` (how far back),
 `-o FILE`, `--no-open`, `--no-fetch`, `--json`.
 
 **Why one prompt can cost more than twenty.** Every step of a prompt (each

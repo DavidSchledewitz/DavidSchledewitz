@@ -653,7 +653,9 @@ def print_summary(data: dict, out: Path, warn: str | None) -> None:
         print(f"  ! couldn't read your current usage: {warn}")
     for key, label in (("five_hour", "5h window"), ("seven_day", "week")):
         f = fits.get(key)
-        if f:
+        if f and f["n"] < 3:
+            print(f"  {label}: roughly calibrated from {f['n']} reading{'' if f['n'] == 1 else 's'} so far")
+        elif f:
             print(f"  {label}: calibrated from {f['n']} readings, typical error ±{f['err']:.0f} pts, "
                   f"local Claude Code explains ~{100 * min(1, f['explained']):.0f}% of it")
         else:
@@ -770,6 +772,7 @@ button:disabled { opacity: .4; cursor: default; }
 .seg button { border: 0; border-radius: 0; padding: 5px 10px; }
 .seg button + button { border-left: 1px solid var(--border); }
 .seg button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
+.seg button:disabled { opacity: .4; cursor: default; background: none; }
 .chart { position: relative; width: 100%; }
 .chart svg { display: block; overflow: visible; }
 .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 10px; font-size: 12.5px; color: var(--ink2); }
@@ -825,8 +828,11 @@ details p, details li { color: var(--ink2); }
 </head>
 <body>
 <main>
-  <h1>Claude usage report</h1>
-  <div class="sub" id="gen"></div>
+  <div class="head" style="margin:0">
+    <div><h1>Claude usage report</h1><div class="sub" id="gen"></div></div>
+    <div class="controls"><span class="muted small">Show as</span>
+      <div class="seg" id="units" role="group" aria-label="Show amounts as"></div></div>
+  </div>
   <div class="tiles" id="tiles"></div>
 
   <section class="card" id="win-five_hour"></section>
@@ -837,7 +843,6 @@ details p, details li { color: var(--ink2); }
       <h2>Chats</h2>
       <div class="controls">
         <select id="period" aria-label="Period"></select>
-        <div class="seg" id="units" role="group" aria-label="Unit"></div>
       </div>
     </div>
     <div class="legend" id="kinds"></div>
@@ -888,9 +893,12 @@ const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
   set(k, v) { try { localStorage.setItem(k, v); } catch { /* private window */ } },
 };
+// Percent by default; dollars only when there's no usage reading to calibrate with.
 let unit = store.get("cu-unit");
 if (!UNITS[unit] || (unit !== "usd" && !UNITS[unit].fit))
   unit = D.fit.five_hour ? "h5" : D.fit.seven_day ? "wk" : "usd";
+// The unit for one limit's own chart: its own percent, unless dollars are chosen.
+const chartUnit = key => unit === "usd" || !D.fit[key] ? "usd" : LIMIT_UNIT[key];
 
 // ---------------------------------------------------------------- helpers
 function h(tag, attrs = {}, ...kids) {
@@ -1140,7 +1148,7 @@ function renderWindow(key) {
   const box = document.getElementById("win-" + key);
   const st = WV[key];
   const name = key === "five_hour" ? "5-hour windows" : "Weekly windows";
-  const u = D.fit[key] ? LIMIT_UNIT[key] : "usd";
+  const u = chartUnit(key);
   box.replaceChildren();
   if (!st.list.length) {
     box.append(h("h2", {}, name), h("div", {class: "empty"}, "No usage in this period."));
@@ -1197,15 +1205,18 @@ function renderWindow(key) {
   const est = total(grid.length - 1);
   const lastM = measured[measured.length - 1];
   let cap;
-  if (u === "usd")
-    cap = `${fmt(est, u)} API-equivalent in this window. Percentages appear once claude-usage has logged readings (run it or the top bar for a while).`;
+  if (u === "usd" && !D.fit[key])
+    cap = `${fmt(est, u)} API-equivalent in this window. Percentages appear once there is a usage reading (run claude-usage or the top bar).`;
+  else if (u === "usd")
+    cap = `${fmt(est, u)} API-equivalent from local Claude Code in this window.`;
   else if (lastM) {
     const at = valueAt(grid.map((_, k) => total(k)), grid, lastM[0]);
     const elsewhere = Math.max(0, lastM[1] - at);
     cap = `Measured ${fmt(lastM[1], u)} at ${fmtTime(lastM[0])}; local Claude Code accounts for about ${fmt(at, u)}` +
       (elsewhere >= 2 ? `, so roughly ${fmt(elsewhere, u)} came from elsewhere (claude.ai, other devices) or calibration error.` : ".");
   } else
-    cap = `About ${fmt(est, u)} from local Claude Code (estimated; no readings were logged in this window).`;
+    cap = `About ${fmt(est, u)} from local Claude Code. No readings were logged in this window, so this is ` +
+      `estimated from the token counts with the calibration from other windows.`;
   box.append(h("div", {class: "caption"}, cap));
 
   const max = ranked.length ? ranked[0][1] : 1;
@@ -1228,20 +1239,30 @@ function renderTiles() {
     h("div", {class: "value"}, value), ...notes.filter(Boolean).map(n => h("div", {class: "note"}, n)));
   for (const [key, label] of [["five_hour", "Current 5-hour window"], ["seven_day", "This week"]]) {
     const last = (D.readings[key] || []).slice(-1)[0];
-    if (!last) { tiles.append(tile(label, "—", "no usage reading logged yet")); continue; }
+    if (!last || last[2] <= now) {
+      const w = D.windows[key].find(([s, e]) => s <= now && now < e);
+      if (!D.fit[key]) tiles.append(tile(label, "—", "no usage reading logged yet"));
+      else if (!w) tiles.append(tile(label, "0%", "no usage in the current window"));
+      else tiles.append(tile(label, "~" + fmt(reqsIn(w[0], now).reduce((a, r) => a + reqVal(r, LIMIT_UNIT[key]), 0), LIMIT_UNIT[key]),
+        "estimated from local Claude Code; no reading in this window"));
+      continue;
+    }
     const [t, pct, resets] = last;
-    if (resets <= now) { tiles.append(tile(label, "0%", "the last window has reset")); continue; }
     tiles.append(tile(label, Math.round(pct) + "%", `resets in ${fmtDur(resets - now)} · at ${key === "five_hour" ? fmtTime(resets) : fmtDT(resets)}`,
       `read ${fmtDur(now - t)} ago`));
   }
   const f5 = D.fit.five_hour, f7 = D.fit.seven_day;
   if (f5 || f7) {
     const f = f5 || f7;
-    tiles.append(tile("Calibration", `±${Math.max(1, Math.round(f.err))} pts`,
-      `typical error of the ${f5 ? "5h" : "weekly"} estimate, fitted on ${f.n} readings`,
-      `local Claude Code explains ~${Math.round(100 * Math.min(1, f.explained))}% of what was measured`));
+    if (f.n < 3)  // one or two points always fit themselves: no error estimate yet
+      tiles.append(tile("Calibration", "rough", `from ${f.n} usage reading${f.n === 1 ? "" : "s"} so far`,
+        "gets more accurate as the top bar or claude-usage logs readings (every 5 minutes)"));
+    else
+      tiles.append(tile("Calibration", `±${Math.max(1, Math.round(f.err))} pts`,
+        `typical error of the ${f5 ? "5h" : "weekly"} estimate, fitted on ${f.n} readings`,
+        `local Claude Code explains ~${Math.round(100 * Math.min(1, f.explained))}% of what was measured`));
   } else {
-    tiles.append(tile("Calibration", "not yet", "needs logged usage readings: run claude-usage or the top bar",
+    tiles.append(tile("Calibration", "not yet", "needs a usage reading: run claude-usage or the top bar on this computer",
       "until then amounts are API-equivalent dollars"));
   }
 }
@@ -1266,8 +1287,10 @@ function renderPeriods() {
 periodSel.addEventListener("change", e => { period = e.target.value; renderChats(); });
 function renderUnits() {
   const box = document.getElementById("units");
-  box.replaceChildren(...Object.entries(UNITS).filter(([k, x]) => k === "usd" || x.fit).map(([k, x]) =>
-    h("button", {"aria-pressed": String(k === unit), onclick: () => { unit = k; store.set("cu-unit", k); renderUnits(); renderChats(); if (openSi !== null) openSession(openSi, false); }}, x.label)));
+  box.replaceChildren(...Object.entries(UNITS).map(([k, x]) =>
+    h("button", {"aria-pressed": String(k === unit), disabled: k !== "usd" && !x.fit,
+      title: k !== "usd" && !x.fit ? "Needs a usage reading: run claude-usage or the top bar on this computer" : null,
+      onclick: () => { unit = k; store.set("cu-unit", k); renderAll(); }}, x.label)));
   document.getElementById("kinds").replaceChildren(...KINDS.map(([, l, c]) => h("span", {}, h("i", {class: "sw", style: `background:${c}`}), l)));
 }
 function kindBar(kv, max) {
