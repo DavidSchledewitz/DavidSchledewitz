@@ -175,7 +175,9 @@ It takes a few seconds, writes `~/.cache/claude-usage/report.html` and opens
 it in your browser. It shows:
 
 - **5-hour and weekly windows**: how each window filled up over time, split
-  by chat, with the real `/usage` percentage drawn on top. Hover for the
+  by chat, with the real `/usage` percentage drawn on top and a dashed
+  **even-pace line** from 0% at the window's start to 100% at its reset:
+  above it you're using the limit faster than it lasts. Hover for the
   numbers at any moment, click a band to open that chat.
 - **Chats**: which chats used the most in the selected window, the week, or
   everything, and what kind of usage it was.
