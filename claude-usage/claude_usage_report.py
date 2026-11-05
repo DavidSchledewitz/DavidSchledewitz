@@ -1091,7 +1091,8 @@ const hideTip = () => { tip.style.display = "none"; };
 
 // ---------------------------------------------------------------- time chart
 // o: {x0, x1, grid, layers:[{name,color}], values:[[...per grid]], stacked, unit, measured:[[t,v]],
-//     dots:[{t,v}], marks:[{t,label}], now, height, label, tip(k, t) -> [title, rows, foot], onPick(layer)}
+//     dots:[{t,v}], marks:[{t,label}], now, height, label, tip(k, t) -> [title, rows, foot], onPick(layer),
+//     pace: draw the even-pace line, 0% at x0 to 100% at x1}
 function timeChart(box, o) {
   box.replaceChildren();
   const W = Math.max(280, box.clientWidth), H = o.height || 260;
@@ -1100,7 +1101,7 @@ function timeChart(box, o) {
   box.append(svg);
   const n = o.grid.length;
   const tops = o.grid.map((_, k) => o.stacked ? o.layers.reduce((a, _, L) => a + o.values[L][k], 0) : Math.max(...o.layers.map((_, L) => o.values[L][k])));
-  const peak = Math.max(0, ...tops, ...(o.measured || []).map(p => p[1]));
+  const peak = Math.max(o.pace ? 100 : 0, ...tops, ...(o.measured || []).map(p => p[1]));
   const ymax = niceMax(peak > 0 ? peak : (o.unit === "usd" ? 1 : 10), o.unit);
   const X = t => m.l + (t - o.x0) / (o.x1 - o.x0) * (W - m.l - m.r);
   const Y = v => H - m.b - v / ymax * (H - m.t - m.b);
@@ -1138,6 +1139,9 @@ function timeChart(box, o) {
       if (o.stacked) base = top;
     });
   }
+  if (o.pace)
+    sv("line", {x1: X(o.x0), y1: Y(0), x2: X(o.x1), y2: Y(100),
+      style: "stroke:var(--ink2);stroke-width:1.5;stroke-dasharray:5 4"}, svg);
   for (const d of o.dots || [])
     sv("circle", {cx: X(d.t), cy: Y(d.v), r: 4, style: `fill:${o.layers[0].color};stroke:var(--surface);stroke-width:2`}, svg);
   if (o.measured && o.measured.length) {
@@ -1271,15 +1275,20 @@ function renderWindow(key) {
     }
   }
 
+  // Even pace: 0% when the window starts, 100% at its reset. Only on the
+  // limit's own percent scale.
+  const pace = u === LIMIT_UNIT[key];
+  const paceAt = t => 100 * Math.min(1, Math.max(0, (t - w.s) / (w.e - w.s)));
   const chart = h("div", {class: "chart"});
   box.append(chart);
   const draw = () => timeChart(chart, {
-    x0: w.s, x1: w.e, grid, layers, values, stacked: true, unit: u, measured, now: D.generated,
+    x0: w.s, x1: w.e, grid, layers, values, stacked: true, unit: u, measured, now: D.generated, pace,
     label: `${name}: cumulative usage by chat`,
     tip: (k, t) => {
       const rows = [];
       const last = measured.filter(([mt]) => mt <= t).pop();
       if (last) rows.push(["var(--ink)", `measured at ${fmtTime(last[0])}`, fmt(last[1], u), true]);
+      if (pace) rows.push(["var(--ink2)", "even pace", fmt(paceAt(t), u), true]);
       if (k >= 0) {
         rows.push(["transparent", "from local transcripts", fmt(total(k), u)]);
         layers.map((l, L) => [l, values[L][k]]).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).slice(0, 6)
@@ -1294,7 +1303,9 @@ function renderWindow(key) {
 
   const legend = h("div", {class: "legend"},
     layers.map(l => h("span", {}, h("i", {class: "sw", style: `background:${l.color}`}), clip(l.name, 40))),
-    measured.length ? h("span", {}, h("i", {class: "sw line", style: "background:var(--ink)"}), "measured (/usage)") : null);
+    measured.length ? h("span", {}, h("i", {class: "sw line", style: "background:var(--ink)"}), "measured (/usage)") : null,
+    pace ? h("span", {}, h("i", {class: "sw line", style: "background:repeating-linear-gradient(90deg,var(--ink2) 0 4px,transparent 4px 7px)"}),
+      "even pace (100% at the reset)") : null);
   box.append(legend);
 
   const est = total(grid.length - 1);
@@ -1316,6 +1327,14 @@ function renderWindow(key) {
     cap = `About ${fmt(est, u)} from local Claude Code. No readings were logged in this window, so this is ` +
       `estimated from the token counts with the calibration from other windows.`;
   box.append(h("div", {class: "caption"}, cap));
+  if (pace) {
+    // Above the line you're using it faster than the limit allows.
+    const tRef = lastM ? lastM[0] : tEnd, used = lastM ? lastM[1] : est, even = paceAt(tRef), diff = used - even;
+    const when = tRef >= w.e - 60 ? "At the reset" : `At ${key === "five_hour" ? fmtTime(tRef) : fmtDT(tRef)}`;
+    box.append(h("div", {class: "caption"}, h("b", {}, Math.abs(diff) < 1 ? "On pace. " :
+      `${fmt(Math.abs(diff), u)} ${diff > 0 ? "over" : "under"} pace. `),
+      `${when}: ${fmt(used, u)} used, where an even pace would be ${fmt(even, u)}. Above the dashed line you're using it faster than the limit allows.`));
+  }
 
   const max = ranked.length ? ranked[0][1] : 1;
   box.append(h("div", {class: "rows"}, ranked.slice(0, 10).map(([si, v], idx) => {
