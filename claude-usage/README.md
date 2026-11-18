@@ -238,28 +238,65 @@ separate cloud credits, not on these limits.
 ## What uses my laptop's power?
 
 The report has a second tab, **Power**: watts per app over time, energy per
-app, and how much of it is Claude (Claude Code sessions, the desktop app, and
-everything Claude runs: shells, scripts, MCP servers). It needs a small
-background sampler:
+app, how much of it is Claude (Claude Code sessions, the desktop app, and
+everything Claude runs: shells, scripts, MCP servers), and what the screen,
+Wi-Fi and the idle laptop take. It needs a small background sampler:
 
 ```bash
 claude-usage power install     # systemd user service, samples once a minute
 claude-usage power now         # one 5-second look, printed
+claude-usage power config      # battery watch settings (below)
 claude-usage power uninstall
 ```
 
-Once a minute it reads how much CPU time each process used and, while the
-laptop is unplugged, the battery's power draw, and appends one line to
-`~/.local/share/claude-usage/power.jsonl` (about 0.5 MB a day, 40 days kept).
-It costs about 15 ms of CPU per minute (about 0.03% of one core) and 13 MB of memory.
+Once a minute it reads how much CPU time each process used, how much GPU time
+each graphics client used, how busy the GPU was, the screen brightness, the
+Wi-Fi traffic and, while the laptop is unplugged, the battery's power draw,
+and appends one line to `~/.local/share/claude-usage/power.jsonl` (about
+0.5 MB a day, 40 days kept). It costs about 15 ms of CPU per minute (about
+0.03% of one core) and 13 MB of memory. No root needed.
 
-Linux doesn't measure power per process, so the watts are split as a
-baseline (screen, memory, Wi-Fi, idle CPU) plus a share of the rest by CPU
-time. On battery the total is measured, so the shares add up to the real
-draw; those samples also fit the model (baseline watts, watts per busy CPU)
-that estimates the total while plugged in. Before 30 battery samples it uses
-typical values for a 15 W laptop CPU. GPU work shows up only through the CPU
-time around it.
+Linux doesn't measure power per part or per process, so it's modelled:
+
+    watts = idle + screen × brightness + CPU × busy CPUs + GPU × busy GPU + Wi-Fi × MB/s
+
+fitted on the battery samples (where the total is measured) and pulled
+towards typical laptop values for whatever the data can't show yet: if you
+never change the brightness, it can't tell what the screen costs. On battery
+the parts are scaled to add up to the measured draw. The CPU part goes to
+apps by CPU time, the GPU part by GPU time. The fit is redone every time the
+report is built, so it improves on its own.
+
+**Battery life.** The Power tab estimates how long the charge left lasts at
+your current use (last 10 minutes), your typical use on battery (median of
+the last two weeks), idle with the screen at your usual brightness, and idle
+dimmed to 20%, and draws them as projections from now to empty next to the
+charge over the last 12 hours. Plugged in, the times are "if you unplugged
+now".
+
+**Battery watch.** While sampling, it watches the draw on battery. If it stays
+well above your usual (1.6× your median on battery, at least 12 W; 15 W until
+that's known) for 3 minutes, you get a notification naming the biggest users,
+and the screen brightness is halved (at most every 10 minutes, never below 20%).
+It only dims while you're at the computer, so GNOME's own idle dimming isn't
+mistaken for you. If you change the brightness yourself, it leaves the screen
+alone until you next unplug; plugging in restores the brightness from before.
+The Power tab lists everything it did.
+
+Alerts show the draw both in watts and as how fast it empties the battery
+(% of a full charge per minute), with the time left at that rate, e.g.
+*"High power draw on battery: 19 W · 0.60%/min. Biggest: Chrome 6.1 W ·
+0.19%/min, …, ~2h 45m left"*. The Power tab shows the same rate per app.
+
+**Settings** are in the top bar: **Claude usage → Power** has switches for the
+alert and the dimming, and **Power report** opens the report on the Power
+tab (`claude-usage report --tab power`). The same from a terminal:
+
+```bash
+claude-usage power config --dim off        # alerts only
+claude-usage power config --watts 18       # fixed threshold instead of learned
+claude-usage power config --floor 30       # never dim below 30%
+```
 
 ## GNOME top bar (Ubuntu)
 
@@ -336,6 +373,6 @@ Things to know:
 ```bash
 python3 -m unittest -v test_claude_usage     # terminal app, includes a fake-server end-to-end run
 python3 -m unittest -v test_claude_usage_report   # report: transcripts, calibration, page
-python3 -m unittest -v test_claude_power          # power: sampler, model, binning
+python3 -m unittest -v test_claude_power          # power: sampler, model, binning, battery watch
 gjs -m gnome-extension/tests/test_usage.js   # extension's parsing/pace logic
 ```
