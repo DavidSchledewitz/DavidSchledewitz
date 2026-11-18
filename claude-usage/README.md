@@ -181,6 +181,11 @@ it in your browser. It shows:
   numbers at any moment, click a band to open that chat.
 - **Chats**: which chats used the most in the selected window, the week, or
   everything, and what kind of usage it was.
+- **What drives it, and what to change**: the same usage sorted by cause
+  (coming back to a long chat after a break, very long chats, big tool
+  output, subagents, writing), each with its share, how much of it a
+  different habit would have saved, the chats and prompts where it happened,
+  and the habit itself. For the last 24 hours, 7 days or everything.
 - **One chat**: how fast it used your limit (with 5h resets marked), and every
   prompt with its share, the tools it ran, the context size of each call and
   the reasons it was expensive, e.g. *"46 model calls, each re-reading the
@@ -229,6 +234,32 @@ the measured readings that local usage doesn't explain (beyond the
 calibration error). The calibration also gives each window its own offset for
 it, so it doesn't inflate the per-token rate. Claude Code on the web runs on
 separate cloud credits, not on these limits.
+
+## What uses my laptop's power?
+
+The report has a second tab, **Power**: watts per app over time, energy per
+app, and how much of it is Claude (Claude Code sessions, the desktop app, and
+everything Claude runs: shells, scripts, MCP servers). It needs a small
+background sampler:
+
+```bash
+claude-usage power install     # systemd user service, samples once a minute
+claude-usage power now         # one 5-second look, printed
+claude-usage power uninstall
+```
+
+Once a minute it reads how much CPU time each process used and, while the
+laptop is unplugged, the battery's power draw, and appends one line to
+`~/.local/share/claude-usage/power.jsonl` (about 0.5 MB a day, 40 days kept).
+It costs about 15 ms of CPU per minute (about 0.03% of one core) and 13 MB of memory.
+
+Linux doesn't measure power per process, so the watts are split as a
+baseline (screen, memory, Wi-Fi, idle CPU) plus a share of the rest by CPU
+time. On battery the total is measured, so the shares add up to the real
+draw; those samples also fit the model (baseline watts, watts per busy CPU)
+that estimates the total while plugged in. Before 30 battery samples it uses
+typical values for a 15 W laptop CPU. GPU work shows up only through the CPU
+time around it.
 
 ## GNOME top bar (Ubuntu)
 
@@ -305,5 +336,6 @@ Things to know:
 ```bash
 python3 -m unittest -v test_claude_usage     # terminal app, includes a fake-server end-to-end run
 python3 -m unittest -v test_claude_usage_report   # report: transcripts, calibration, page
+python3 -m unittest -v test_claude_power          # power: sampler, model, binning
 gjs -m gnome-extension/tests/test_usage.js   # extension's parsing/pace logic
 ```

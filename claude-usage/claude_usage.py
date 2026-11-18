@@ -15,6 +15,7 @@ Modes:
     claude-usage --json     raw JSON from the API
     claude-usage --login    log in again via Claude Code (opens your browser)
     claude-usage report     what used your limits, per chat and per prompt (HTML)
+    claude-usage power      what uses your laptop's power, per app (feeds the report's Power tab)
 
 An expired login is renewed the way Claude Code renews it and written back to
 Claude Code's credentials file, so a browser login is rarely needed. Turn that
@@ -976,6 +977,9 @@ def main(argv: list[str] | None = None) -> int:
     if argv[:1] == ["report"]:
         import claude_usage_report
         return claude_usage_report.main(argv[1:])
+    if argv[:1] == ["power"]:
+        import claude_power
+        return claude_power.main(argv[1:])
     p = argparse.ArgumentParser(
         prog="claude-usage",
         description="Live view of your Claude plan usage: 5h session, weekly limits, time to reset.",

@@ -32,7 +32,7 @@ mkdir -p "$(dirname "$DEST")"
 rm -rf "$DEST"
 cp -r "$SRC" "$DEST"
 # "Usage Report" in the popup runs the report from these copies.
-cp "$SRC/../../claude_usage.py" "$SRC/../../claude_usage_report.py" "$DEST/"
+cp "$SRC/../../claude_usage.py" "$SRC/../../claude_usage_report.py" "$SRC/../../claude_power.py" "$DEST/"
 echo "Installed to $DEST"
 
 if gnome-extensions info "$UUID" &>/dev/null; then

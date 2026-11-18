@@ -22,6 +22,7 @@ no transcripts here; the report shows that part as "not in local transcripts".
 from __future__ import annotations
 
 import argparse
+import bisect
 import json
 import math
 import os
@@ -66,6 +67,8 @@ PRICES = [
 DEFAULT_PRICE = (4, 20, 0.2)
 
 AGENT_TOOLS = ("Agent", "Task")
+LONG_CTX = 150_000  # past this, every step re-reads a lot more than a fresh chat would
+HANDOFF_CTX = 60_000  # a new chat started from a summary: system prompt, tools, the summary
 INJECTED = "skills & injected text"  # stands in for a tool name in tool_out
 
 
@@ -380,6 +383,7 @@ def summarize(requests: list, tool_out: dict) -> dict:
     cost = {"read": 0.0, "write": 0.0, "input": 0.0, "output": 0.0}
     tok = {"in": 0, "cw": 0, "cr": 0, "out": 0, "think": 0}
     sub_cost = sub_read = rebuild_cost = main_read = 0.0
+    break_cost = break_saving = long_read = 0.0  # for the patterns: after a break, above LONG_CTX
     rebuilds, models, tools = [], set(), defaultdict(int)
     n_main = n_sub = agents = max_ctx = ctx_sum = 0
     for r in requests:
@@ -406,9 +410,14 @@ def summarize(requests: list, tool_out: dict) -> dict:
         ctx_sum += r.ctx
         cw = r.cw5 + r.cw1h
         ttl = HOUR if r.cw1h > r.cw5 else 300
+        if r.ctx > LONG_CTX:
+            long_read += c["read"] * (r.ctx - LONG_CTX) / r.ctx
         if cw >= 15000 and (r.gap == math.inf or (r.gap >= ttl and cw >= 0.5 * r.ctx)):
             rebuilds.append((r.gap, cw))
             rebuild_cost += c["write"]
+            if r.gap != math.inf:
+                break_cost += c["write"]
+                break_saving += c["write"] * max(0.0, 1 - HANDOFF_CTX / max(cw, 1))
     total = sum(cost.values()) or 1e-12
     reasons = []
 
@@ -448,6 +457,8 @@ def summarize(requests: list, tool_out: dict) -> dict:
         "sub": [round(sub_read, 6), round(sub_cost - sub_read, 6)],  # subagents: cache reads, rest
         "tok": tok, "n": n_main, "ns": n_sub, "agents": agents,
         "max_ctx": max_ctx, "models": sorted(models), "reasons": reasons[:5],
+        # API dollars: re-cached after a break, of which a fresh chat would have saved; re-reading above LONG_CTX
+        "pat": [round(break_cost, 6), round(break_saving, 6), round(long_read, 6)],
         "tools": sorted(([k, tools.get(k, 0), tool_out.get(k, 0)] for k in set(tools) | set(tool_out)),
                         key=lambda x: (-x[2], -x[1]))[:12],
     }
@@ -633,6 +644,37 @@ def fit_notes(fits: dict, readings: dict) -> dict:
     return notes
 
 
+def tool_carry(s: Session) -> list[list[float]]:
+    """Per prompt, an estimate of what its tool output (files read, command
+    output) cost from then on: cached once, then re-read by every later call
+    until the chat is compacted. [cache-read $, other $]"""
+    main = [r for r in s.requests if not r.sidechain]
+    times = [r.t for r in main]
+    compactions = [b.t for a, b in zip(main, main[1:]) if a.ctx > 100_000 and b.ctx < 0.5 * a.ctx]
+    out = []
+    for p in s.prompts:
+        tokens = sum(v for k, v in p.tool_out.items() if k != INJECTED)
+        if not tokens:
+            out.append([0.0, 0.0])
+            continue
+        end = next((t for t in compactions if t > p.t), math.inf)
+        first = next((r.t for r in p.requests if not r.sidechain), p.t)  # tool output arrives after the first call
+        later = bisect.bisect_left(times, end) - bisect.bisect_right(times, first)
+        p_in, _, p_cr = price(p.requests[0].model)
+        out.append([round(tokens * p_cr * max(0, later) * 1e-6, 6), round(tokens * 1.25 * p_in * 1e-6, 6)])
+    return out
+
+
+def power_data(since: float, now: float) -> dict | None:
+    """Samples from `claude-usage power log`, binned for the Power tab."""
+    try:
+        import claude_power
+        return claude_power.build(since, now)
+    except Exception as exc:  # a broken power log must not break the usage report
+        print(f"claude-usage report: skipped power data: {exc}", file=sys.stderr)
+        return None
+
+
 def build(days: float, now: float, readings: dict, plan: str | None, dirs=None, warning: str | None = None) -> dict:
     since = now - days * DAY
     sessions = load_sessions(since, dirs)
@@ -642,9 +684,10 @@ def build(days: float, now: float, readings: dict, plan: str | None, dirs=None, 
     order = sorted(sessions.values(), key=lambda s: s.requests[-1].t, reverse=True)
     for si, s in enumerate(order):
         prompts = []
+        carry = tool_carry(s)
         for pi, p in enumerate(s.prompts):
             info = summarize(p.requests, p.tool_out)
-            info.update(t=p.t, end=p.requests[-1].t, text=p.text,
+            info.update(t=p.t, end=p.requests[-1].t, text=p.text, tool=carry[pi],
                         ctx=[r.ctx for r in p.requests if not r.sidechain][:300])
             prompts.append(info)
             for r in p.requests:
@@ -669,6 +712,7 @@ def build(days: float, now: float, readings: dict, plan: str | None, dirs=None, 
         "readings": {k: [[round(t, 1), p, r] for t, p, r in v if t >= since] for k, v in readings.items()},
         "windows": {k: windows_for(k, times, [x for x in readings[k] if x[2] > since], now) for k in WINDOWS},
         "sessions": rows,
+        "power": power_data(since, now),
         # one row per model call: [t, session, prompt, read$, write$, input$, output$, by subagent]
         "req": reqs,
     }
@@ -890,12 +934,32 @@ tbody tr:hover, tbody tr:focus-visible { background: var(--wash); outline: none;
 .empty { color: var(--muted); padding: 24px 0; text-align: center; }
 .back { margin-bottom: 8px; }
 details summary { cursor: pointer; font-weight: 600; }
+.tabs { display: flex; gap: 4px; margin-top: 14px; border-bottom: 1px solid var(--border); }
+.tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; padding: 8px 12px; color: var(--ink2); font-weight: 550; }
+.tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); }
+.tabs button:hover { background: var(--wash); }
+.lead { font-size: 15px; margin: 0 0 12px; }
+.pat { display: grid; grid-template-columns: minmax(0, 1fr) minmax(90px, 26%) 72px; gap: 6px 14px; align-items: center; padding: 12px 0; border-top: 1px solid var(--grid); }
+.pat .name { font-weight: 600; }
+.pat .why, .pat .fix, .pat .ex { grid-column: 1 / -1; font-size: 13px; color: var(--ink2); }
+.pat .fix { color: var(--ink); }
+.pat .fix b { font-weight: 600; }
+.pat .ex { display: grid; gap: 2px; }
+.pat .ex a, .linky { color: inherit; text-decoration: underline; text-decoration-color: var(--axis); cursor: pointer; }
+.meter { height: 10px; border-radius: 0 4px 4px 0; background: var(--wash); position: relative; }
+.meter i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 0 4px 4px 0; }
+.meter i.save { background: repeating-linear-gradient(135deg, transparent 0 3px, rgba(0,0,0,.18) 3px 5px); }
+tr.claude td:first-child { box-shadow: inset 3px 0 0 var(--s2); }
+.tag { font-size: 11.5px; color: var(--ink2); border: 1px solid var(--border); border-radius: 999px; padding: 0 7px; margin-left: 6px; white-space: nowrap; }
+pre.cmd { background: var(--wash); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; overflow-x: auto; }
 details p, details li { color: var(--ink2); }
 @media (max-width: 640px) {
   .row { grid-template-columns: 12px minmax(0, 1fr) 56px; }
   .row .track { display: none; }
   .prompt .top { grid-template-columns: minmax(0, 1fr) 64px; }
   .prompt .top .track { display: none; }
+  .pat { grid-template-columns: minmax(0, 1fr) 64px; }
+  .pat .meter { display: none; }
   .hide-sm { display: none; }
 }
 </style>
@@ -905,10 +969,23 @@ details p, details li { color: var(--ink2); }
   <div class="head" style="margin:0">
     <div><h1>Claude usage report</h1><div class="sub" id="gen"></div>
       <div class="caption" id="warning" hidden></div></div>
-    <div class="controls"><span class="muted small">Show as</span>
+    <div class="controls" id="unit-controls"><span class="muted small">Show as</span>
       <div class="seg" id="units" role="group" aria-label="Show amounts as"></div></div>
   </div>
+  <div class="tabs" role="tablist" aria-label="Report">
+    <button role="tab" id="tabbtn-usage" aria-selected="true" aria-controls="tab-usage">Claude usage</button>
+    <button role="tab" id="tabbtn-power" aria-selected="false" aria-controls="tab-power">Power</button>
+  </div>
+  <div id="tab-usage" role="tabpanel">
   <div class="tiles" id="tiles"></div>
+
+  <section class="card" id="patterns">
+    <div class="head">
+      <h2>What drives it, and what to change</h2>
+      <div class="controls"><select id="pat-period" aria-label="Period for patterns"></select></div>
+    </div>
+    <div id="pat-body"></div>
+  </section>
 
   <section class="card" id="win-five_hour"></section>
   <section class="card" id="win-seven_day"></section>
@@ -947,8 +1024,15 @@ details p, details li { color: var(--ink2); }
         the report can't split them up. The gray "Elsewhere" band in the window charts is their total: what the
         measured readings show beyond the local usage (within the calibration error). Claude Code on the web runs on
         separate cloud credits.</p>
+      <p><b>Patterns</b> sort the same amounts by cause. They overlap: a big file read in a long chat is re-read on
+        every later step, so it counts under "big tool output" and under "very long chats". "Could be saved" assumes
+        you'd have continued in a new chat started from a short summary (about 60k tokens with system prompt and
+        tools) instead of coming back to the long one, and that chats stay under 150k tokens.</p>
     </details>
   </section>
+  </div>
+
+  <div id="tab-power" role="tabpanel" hidden></div>
 </main>
 <div id="tip" role="tooltip"></div>
 <script>
@@ -1015,6 +1099,7 @@ function fmt(v, u = unit) {
   return (v < 10 ? v.toFixed(1) : Math.round(v)) + "%";
 }
 function fmtAxis(v, u) {
+  if (u === "W") return +v.toFixed(1) + " W";
   if (u === "usd") return "$" + (v >= 10 ? Math.round(v) : +v.toFixed(2));
   return +v.toFixed(1) + "%";
 }
@@ -1461,6 +1546,119 @@ function renderChats() {
       showAll ? "Show fewer" : `Show all ${rows.length} chats`)));
 }
 
+// ---------------------------------------------------------------- patterns
+// The same usage sorted by cause, with the change that would have avoided it.
+// Amounts are [cache-read $, other $] so they convert to any unit.
+const patSel = document.getElementById("pat-period");
+let patPeriod = store.get("cu-pat") || "7";
+const PAT_PERIODS = [["1", "Last 24 hours"], ["7", "Last 7 days"], ["all", `All ${D.days} days`]];
+patSel.replaceChildren(...PAT_PERIODS.map(([v, l]) => h("option", {value: v, selected: v === patPeriod}, l)));
+patSel.addEventListener("change", e => { patPeriod = e.target.value; store.set("cu-pat", patPeriod); renderPatterns(); });
+const PATTERNS = [
+  {key: "breaks", name: "Coming back to a long chat after a break", color: "var(--s2)",
+   why: "Claude keeps a conversation in its cache for up to an hour. After that, your next message caches the whole chat again, and that costs in proportion to its length: a one-line reply to a 900k-token chat costs as much as reading a book.",
+   fix: "<b>Before you leave a long chat for more than an hour, ask for a short handoff summary and continue in a new chat.</b> Or run <code>/compact</code> before the break. Quick follow-ups within the hour are cheap; it's the comeback that costs."},
+  {key: "long", name: "Very long chats (over 150k tokens)", color: "var(--s1)",
+   why: "Every step (each tool call, each file read) sends the whole conversation again. Past 150k tokens each step costs several times what it would in a fresh chat, and a long task does many steps.",
+   fix: "<b>One topic per chat.</b> When a chat passes ~150k tokens (the context bars in each prompt show it), finish the current thing and start fresh for the next one."},
+  {key: "tools", name: "Big tool output kept in the chat", color: "var(--s3)",
+   why: "Whatever a tool returns (a whole PDF, a long log, a big file) stays in the conversation and is re-read on every later step until the chat is compacted.",
+   fix: "<b>Ask for the part you need</b>: page ranges of a PDF, <code>head</code>/<code>grep</code> of a log, one function instead of a file. Attach big documents in a separate chat that only extracts what you need."},
+  {key: "agents", name: "Subagents", color: "var(--s7)",
+   why: "Each subagent starts its own context and re-reads it every step. Worth it for wide searches, wasteful for small lookups.",
+   fix: "<b>Ask for subagents only for broad searches or parallel work</b>, not for single-file questions."},
+  {key: "output", name: "Writing (answers, files, thinking)", color: "var(--s4)",
+   why: "Output costs about five times more per token than input. Long documents, rewritten files and deep thinking add up, but this is usually the part you wanted.",
+   fix: "Mostly fine. If answers are longer than you need, say so; for small edits ask for an edit instead of a rewritten file."},
+];
+function patternAmounts(p) {
+  return {
+    breaks: [0, p.pat[0]], long: [p.pat[2], 0], tools: [p.tool[0], p.tool[1]],
+    agents: [p.sub[0], p.sub[1]], output: [0, p.cost.output],
+  };
+}
+function patternSaving(p) {
+  return {breaks: [0, p.pat[1]], long: [p.pat[2], 0]};
+}
+function renderPatterns() {
+  const box = document.getElementById("pat-body");
+  // a week in % of a 5h window reads like 1000%; longer periods go in % of the week
+  const pu = unit === "h5" && patPeriod !== "1" && D.fit.seven_day ? "wk" : unit;
+  const val = (r, o) => window.val(r, o, pu), fmt = x => window.fmt(x, pu);
+  const since = patPeriod === "all" ? -Infinity : D.generated - Number(patPeriod) * 86400;
+  const tot = {}, save = {}, byChat = {}, examples = [];
+  let total = 0;
+  for (const P of PATTERNS) { tot[P.key] = [0, 0]; save[P.key] = [0, 0]; byChat[P.key] = new Map(); }
+  D.sessions.forEach((sess, si) => sess.prompts.forEach(p => {
+    if (p.t < since) return;
+    total += val(p.cost.read, p.cost.write + p.cost.input + p.cost.output);
+    const a = patternAmounts(p), sv_ = patternSaving(p);
+    for (const P of PATTERNS) {
+      const [r, o] = a[P.key];
+      if (!(r + o)) continue;
+      tot[P.key][0] += r; tot[P.key][1] += o;
+      byChat[P.key].set(si, (byChat[P.key].get(si) || 0) + val(r, o));
+      if (sv_[P.key]) { save[P.key][0] += sv_[P.key][0]; save[P.key][1] += sv_[P.key][1]; }
+    }
+    if (p.pat[0] > 0) examples.push({si, p, v: val(0, p.pat[0])});
+  }));
+  if (!total) { box.replaceChildren(h("div", {class: "empty"}, "No local Claude Code usage in this period.")); return; }
+  const v = k => val(...tot[k]), sv2 = k => val(...save[k]);
+  const avoid = sv2("breaks") + sv2("long");
+  const label = PAT_PERIODS.find(([k]) => k === patPeriod)[1].toLowerCase();
+  const unitWord = pu === "usd" ? " (API prices)" : pu === "h5" ? " of a 5-hour window" : " of a week";
+  const top = PATTERNS.filter(P => P.key === "breaks" || P.key === "long").sort((a, b) => sv2(b.key) - sv2(a.key))[0];
+  const rows = PATTERNS.filter(P => v(P.key) >= 0.005 * total).sort((a, b) => v(b.key) - v(a.key));
+  box.replaceChildren(
+    h("p", {class: "lead"}, `${label.charAt(0).toUpperCase() + label.slice(1)}, local Claude Code used ${fmt(total)}${unitWord}. `,
+      avoid > 0.05 * total ? h("b", {}, `About ${fmt(avoid)}${pu === "usd" ? "" : unitWord} of it (${Math.round(100 * avoid / total)}%) could have been saved`) : "Little of it was avoidable",
+      avoid > 0.05 * total ? `, mostly by ${top.key === "breaks" ? "starting a new chat instead of coming back to a long one" : "keeping chats shorter"}.` : "."),
+    ...rows.map(P => {
+      const value = v(P.key), saving = sv2(P.key);
+      const chats = [...byChat[P.key].entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
+      const exs = P.key === "breaks" ? examples.sort((a, b) => b.v - a.v).slice(0, 4) : [];
+      return h("div", {class: "pat"},
+        h("div", {}, h("div", {class: "name"}, P.name),
+          h("div", {class: "muted small"}, `${Math.round(100 * value / total)}% of all local usage` +
+            (saving > 0.005 * total ? ` · about ${Math.round(100 * saving / value)}% of this was avoidable` : ""))),
+        h("div", {class: "meter", title: saving ? "hatched: could be saved" : null},
+          h("i", {style: `width:${100 * value / total}%;background:${P.color}`}),
+          saving ? h("i", {class: "save", style: `width:${100 * saving / total}%`}) : null),
+        h("div", {class: "num", style: "text-align:right;font-weight:600"}, fmt(value)),
+        h("div", {class: "why"}, P.why),
+        exs.length ? h("div", {class: "ex"}, h("span", {class: "muted"}, "Most expensive comebacks:"),
+          exs.map(({si, p, v: x}) => h("div", {},
+            h("b", {}, fmt(x)), " · ", h("a", {class: "linky", tabindex: 0, onclick: () => openSession(si)}, clip(D.sessions[si].title, 40)),
+            h("span", {class: "muted"}, ` · ${fmtDT(p.t)} · “${clip(p.text, 60)}”` + idleNote(p)))))
+          : h("div", {class: "ex"}, h("span", {}, h("span", {class: "muted"}, "Mostly in: "),
+              chats.map(([si, x], i) => [i ? ", " : "", h("a", {class: "linky", tabindex: 0, onclick: () => openSession(si)}, clip(D.sessions[si].title, 40)), ` (${fmt(x)})`]))),
+        h("div", {class: "fix"}, ...htmlBits(P.fix)));
+    }));
+}
+function idleNote(p) {
+  const r = p.reasons.find(([t]) => t.startsWith("cache expired"));
+  return r ? " · " + r[0].split(":")[0].replace("cache expired", "came back") + ", " + r[0].match(/\(([^)]+)\)/)?.[1] + " re-cached" : "";
+}
+// the fix texts carry a little markup (<b>, <code>); they're constants, not data
+function htmlBits(s) {
+  const t = document.createElement("template");
+  t.innerHTML = s;
+  return [...t.content.childNodes];
+}
+function chatAdvice(sess) {
+  const brk = sess.prompts.reduce((a, p) => a + p.pat[0], 0), brkSave = sess.prompts.reduce((a, p) => a + p.pat[1], 0);
+  const long = sess.prompts.reduce((a, p) => a + p.pat[2], 0);
+  const total = sess.cost.read + sess.cost.write + sess.cost.input + sess.cost.output;
+  const n = sess.prompts.filter(p => p.pat[0] > 0).length;
+  const out = [], u = unit === "usd" ? "" : unit === "h5" ? " of a 5h window" : " of a week";
+  if (brk > 0.15 * total)
+    out.push(`${Math.round(100 * brk / total)}% of this chat (${fmt(val(0, brk))}${u}) was re-caching it after ${n} break${n === 1 ? "" : "s"}. ` +
+      `Continuing in a new chat from a summary each time would have saved about ${fmt(val(0, brkSave))}${u}.`);
+  if (long > 0.15 * total)
+    out.push(`${Math.round(100 * long / total)}% (${fmt(val(long, 0))}${u}) was re-reading the part of the conversation beyond 150k tokens on every step. Splitting it into shorter chats would have avoided most of that.`);
+  return out;
+}
+
 // ---------------------------------------------------------------- session detail
 let openSi = null;
 function openSession(si, scroll = true) {
@@ -1482,6 +1680,7 @@ function openSession(si, scroll = true) {
       tile("Peak context", fmtTok(sess.max_ctx), "tokens re-sent on the largest call"),
       sess.sub[0] + sess.sub[1] > 0 ? tile("Subagents", fmt(val(sess.sub[0], sess.sub[1])), `${Math.round(100 * val(sess.sub[0], sess.sub[1]) / (total || 1))}% of this chat`) : null),
     sess.reasons.length ? h("div", {class: "chips"}, sess.reasons.map(([t, s]) => h("span", {class: "chip"}, s > 0 ? h("b", {}, Math.round(100 * s) + "% ") : null, t))) : null,
+    ...chatAdvice(sess).map(t => h("p", {class: "caption", style: "color:var(--ink)"}, h("b", {}, "What would have helped: "), t)),
   );
 
   // burn-up over time
@@ -1568,6 +1767,152 @@ function ctxBars(ctx) {
   return h("div", {class: "chart"}, svg);
 }
 
+// ---------------------------------------------------------------- power tab
+const PW = D.power;
+let pwRange = store.get("cu-pw") || "1";
+const PW_RANGES = [["1", "24 hours"], ["7", "7 days"], ["all", "All"]];
+const CLAUDE_COLORS = ["var(--s2)", "var(--s5)", "var(--s8)"];
+const OTHER_COLORS = ["var(--s1)", "var(--s3)", "var(--s7)", "var(--s6)", "var(--s4)"];
+const fmtW = w => (w >= 10 ? w.toFixed(0) : w.toFixed(1)) + " W";
+const fmtWh = wh => wh >= 1000 ? (wh / 1000).toFixed(1) + " kWh" : wh >= 10 ? wh.toFixed(0) + " Wh" : wh.toFixed(1) + " Wh";
+function renderPower() {
+  const box = document.getElementById("tab-power");
+  if (!PW) {
+    box.replaceChildren(h("section", {class: "card"},
+      h("h2", {}, "Power use per app"),
+      h("p", {}, "No power samples yet. A small background sampler records, once a minute, how much CPU time each app used and, " +
+        "while the laptop runs on battery, how many watts it draws. It costs about 15 ms of CPU per minute."),
+      h("p", {}, "Start it with:"), h("pre", {class: "cmd"}, "claude-usage power install"),
+      h("p", {class: "muted small"}, "Remove it again with claude-usage power uninstall. The samples stay on this computer.")));
+    return;
+  }
+  const now = D.generated;
+  const since = pwRange === "all" ? -Infinity : now - Number(pwRange) * 86400;
+  const bins = PW.bins.filter(b => b[0] + PW.bin > since);
+  const G = PW.groups, isClaude = g => PW.claude.includes(g);
+  const wh = new Array(G.length).fill(0);
+  let secs = 0, measSecs = 0, acSecs = 0;
+  for (const [, s, meas, ac, vals] of bins) {
+    vals.forEach((v, i) => { wh[i] += v; });
+    secs += s; if (meas !== null) measSecs += s; acSecs += ac * s;
+  }
+  const total = wh.reduce((a, b) => a + b, 0), hours = secs / 3600;
+  const iBase = G.indexOf(PW.baseline);
+  const claudeWh = G.reduce((a, g, i) => a + (isClaude(g) ? wh[i] : 0), 0);
+  const active = total - (iBase >= 0 ? wh[iBase] : 0);
+  const m = PW.model;
+  const tile = (label, value, ...notes) => h("div", {class: "tile"}, h("div", {class: "label"}, label), h("div", {class: "value"}, value), ...notes.map(n => h("div", {class: "note"}, n)));
+  const seg = h("div", {class: "seg", role: "group", "aria-label": "Time range"},
+    PW_RANGES.map(([k, l]) => h("button", {"aria-pressed": String(k === pwRange), onclick: () => { pwRange = k; store.set("cu-pw", k); renderPower(); }}, l)));
+  const chart = h("div", {class: "chart"});
+  box.replaceChildren(
+    h("div", {class: "tiles"},
+      tile("Average draw", hours ? fmtW(total / hours) : "—", `over ${fmtDur(secs)} sampled`,
+        measSecs ? `${Math.round(100 * measSecs / secs)}% of it measured on battery` : "all on AC power: estimated"),
+      tile("Energy", fmtWh(total), `${fmtWh(active)} of it from apps working, the rest baseline`),
+      tile("Claude", total ? `${Math.round(100 * claudeWh / total)}%` : "—", `${fmtWh(claudeWh)} of all power`,
+        active ? `${Math.round(100 * claudeWh / active)}% of what apps added on top of the baseline` : ""),
+      tile("Power model", m.fitted ? `±${m.err.toFixed(1)} W` : "typical",
+        m.fitted ? `fitted on ${m.n} battery samples` : `needs ${Math.max(0, 30 - m.n)} more samples on battery to fit your laptop`,
+        `baseline ${m.base.toFixed(1)} W + up to ${m.per_cpu.toFixed(0)} W with all ${PW.ncpu} CPUs busy`)),
+    h("section", {class: "card"},
+      h("div", {class: "head"}, h("h2", {}, "Power over time"), seg),
+      chart,
+      h("div", {class: "legend", id: "pw-legend"}),
+      h("div", {class: "caption"}, "Average watts per app in each slot. The black line is the battery's own measurement, " +
+        "only available while unplugged. Gaps are times the laptop was off, asleep or the sampler wasn't running.")),
+    h("section", {class: "card"}, h("h2", {}, "Apps"), h("div", {id: "pw-table", style: "margin-top:10px"}),
+      h("details", {style: "margin-top:12px"}, h("summary", {}, "How this is measured"),
+        h("p", {}, "Linux doesn't measure power per process. Once a minute the sampler reads how much CPU time every process used " +
+          "and groups processes into apps. Claude counts as three groups: Claude Code sessions, the desktop app, and everything " +
+          "Claude starts (shells, scripts, MCP servers), found by following each process's parents."),
+        h("p", {}, "Watts are split as baseline + a share of the rest by CPU time. The baseline is what the laptop draws doing " +
+          "nothing (screen, memory, Wi-Fi). On battery the total is measured, so the shares add up to the real draw; on AC " +
+          "the total is estimated from CPU load with the model fitted on the battery samples."),
+        h("p", {}, "Not covered: GPU work (video playback, graphics) appears only through the CPU time around it, and screen " +
+          "brightness moves the baseline. Short commands that start and end within a minute are caught through their parent " +
+          "process; whatever can't be placed is listed as \"Short-lived processes\"."))));
+
+  // chart layers: baseline, Claude groups, the biggest other apps, the rest as Other
+  const order = G.map((g, i) => i).filter(i => i !== iBase).sort((a, b) => wh[b] - wh[a]);
+  const claudeIdx = order.filter(i => isClaude(G[i]));
+  const otherIdx = order.filter(i => !isClaude(G[i]) && G[i] !== "Other").slice(0, OTHER_COLORS.length);
+  const shown = new Set([iBase, ...claudeIdx, ...otherIdx]);
+  const layers = [], idxs = [];
+  if (iBase >= 0) { layers.push({name: "Baseline (idle)", color: "var(--other)", opacity: 0.55}); idxs.push([iBase]); }
+  otherIdx.forEach((i, k) => { layers.push({name: G[i], color: OTHER_COLORS[k]}); idxs.push([i]); });
+  const rest = G.map((g, i) => i).filter(i => !shown.has(i));
+  if (rest.length) { layers.push({name: "Other apps", color: "var(--muted)", opacity: 0.6}); idxs.push(rest); }
+  claudeIdx.forEach((i, k) => { layers.push({name: G[i], color: CLAUDE_COLORS[k % 3]}); idxs.push([i]); });
+  const step = (pwRange === "1" ? 1 : 4) * PW.bin;
+  const x1 = now, x0 = pwRange === "all" ? (bins.length ? bins[0][0] : now - 86400) : since;
+  const slots = new Map();
+  for (const b of bins) {
+    const k = Math.floor(b[0] / step) * step;
+    let s = slots.get(k);
+    if (!s) slots.set(k, s = {secs: 0, wh: new Array(G.length).fill(0), meas: [0, 0]});
+    s.secs += b[1]; b[4].forEach((v, i) => { s.wh[i] += v; });
+    if (b[2] !== null) { s.meas[0] += b[2] * b[1]; s.meas[1] += b[1]; }
+  }
+  const grid = [], values = layers.map(() => []), measured = [];
+  for (let t = Math.floor(x0 / step) * step; t <= x1; t += step) {
+    const s = slots.get(t);
+    grid.push(t + step / 2);
+    idxs.forEach((ii, L) => values[L].push(s && s.secs ? ii.reduce((a, i) => a + s.wh[i], 0) / (s.secs / 3600) : 0));
+    if (s && s.meas[1] >= 0.5 * s.secs) measured.push([t + step / 2, s.meas[0] / s.meas[1]]);
+  }
+  document.getElementById("pw-legend").replaceChildren(
+    ...layers.map(l => h("span", {}, h("i", {class: "sw", style: `background:${l.color}`}), l.name)),
+    ...(measured.length ? [h("span", {}, h("i", {class: "sw line", style: "background:var(--ink)"}), "measured on battery")] : []));
+  const draw = () => timeChart(chart, {
+    x0, x1, grid, values, layers, stacked: true, unit: "W", measured, now, height: 280, label: "Watts per app over time",
+    tip: (k) => {
+      if (k < 0) return ["", []];
+      const s = slots.get(grid[k] - step / 2);
+      const rows = layers.map((l, L) => [l.color, l.name, fmtW(values[L][k])]).filter(r => parseFloat(r[2]) > 0).reverse();
+      const tot = values.reduce((a, v) => a + v[k], 0);
+      return [`${fmtDT(grid[k] - step / 2)} – ${fmtTime(grid[k] + step / 2)}`, rows,
+        s && s.secs ? `total ${fmtW(tot)}` + (s.meas[1] ? ` · measured ${fmtW(s.meas[0] / s.meas[1])}` : " · on AC, estimated") : "not sampled"];
+    },
+  });
+  draw();
+  resizers.power = draw;
+
+  // table
+  const rows = G.map((g, i) => ({g, wh: wh[i]})).filter(r => r.wh > 0).sort((a, b) => b.wh - a.wh);
+  const maxWh = Math.max(...rows.map(r => r.wh), claudeWh, 1e-9);
+  const bar = (x, color) => h("span", {class: "track", style: `width:${Math.max(1, 100 * x / maxWh)}%`}, h("i", {style: `flex:1 1 0;background:${color}`}));
+  const colorOf = g => { const L = layers.findIndex((l, k) => idxs[k].includes(G.indexOf(g))); return L >= 0 ? layers[L].color : "var(--muted)"; };
+  const tr = (name, x, color, cls, tag) => h("tr", {class: cls || null, style: "cursor:default"},
+    h("td", {}, h("span", {class: "title"}, name), tag ? h("span", {class: "tag"}, tag) : null),
+    h("td", {class: "num"}, fmtWh(x)), h("td", {class: "num hide-sm"}, hours ? fmtW(x / hours) : "—"),
+    h("td", {class: "hide-sm", style: "width:30%"}, bar(x, color)),
+    h("td", {class: "num"}, total ? (100 * x / total).toFixed(x / total < 0.1 ? 1 : 0) + "%" : "—"));
+  document.getElementById("pw-table").replaceChildren(rows.length ? h("table", {},
+    h("thead", {}, h("tr", {}, h("th", {}, "App"), h("th", {class: "num"}, "Energy"), h("th", {class: "num hide-sm"}, "Average"),
+      h("th", {class: "hide-sm"}, ""), h("th", {class: "num"}, "Share"))),
+    h("tbody", {},
+      claudeWh ? tr("All of Claude", claudeWh, "var(--s2)", "claude", "3 groups below") : null,
+      rows.map(r => tr(r.g === PW.baseline ? "Baseline (screen, memory, Wi-Fi, idle CPU)" : r.g, r.wh, colorOf(r.g),
+        isClaude(r.g) ? "claude" : null, isClaude(r.g) ? "Claude" : null)))) : h("div", {class: "empty"}, "No samples in this range."));
+}
+
+// ---------------------------------------------------------------- tabs
+let tab = store.get("cu-tab") === "power" ? "power" : "usage";
+let powerDrawn = false;
+function showTab(t) {
+  tab = t; store.set("cu-tab", t);
+  for (const k of ["usage", "power"]) {
+    document.getElementById("tab-" + k).hidden = k !== t;
+    document.getElementById("tabbtn-" + k).setAttribute("aria-selected", String(k === t));
+  }
+  document.getElementById("unit-controls").style.visibility = t === "usage" ? "" : "hidden";
+  if (t === "power" && !powerDrawn) { powerDrawn = true; renderPower(); }
+  if (t === "usage") Object.entries(resizers).forEach(([k, f]) => { if (k !== "power") f(); });
+}
+document.getElementById("tabbtn-usage").addEventListener("click", () => showTab("usage"));
+document.getElementById("tabbtn-power").addEventListener("click", () => showTab("power"));
+
 // ---------------------------------------------------------------- boot
 const resizers = {};
 function renderAll() {
@@ -1575,6 +1920,7 @@ function renderAll() {
   renderWindow("seven_day");
   renderUnits();
   renderChats();
+  renderPatterns();
   if (openSi !== null) openSession(openSi, false);
 }
 document.getElementById("gen").textContent =
@@ -1587,6 +1933,7 @@ if (D.warning) {
 }
 renderTiles();
 renderAll();
+showTab(tab);
 let rt = 0;
 addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => Object.values(resizers).forEach(f => f()), 150); });
 </script>
