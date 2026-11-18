@@ -124,6 +124,21 @@ class LoadTests(unittest.TestCase):
         shares = [x for _, x in first["reasons"]]
         self.assertEqual(shares, sorted(shares, reverse=True))
 
+    def test_patterns(self):
+        s = self.sessions["s1"]
+        first, second = (rep.summarize(p.requests, p.tool_out) for p in s.prompts)
+        self.assertEqual(first["pat"][:2], [0, 0])  # a new chat isn't a comeback
+        brk, save, long_read = second["pat"]
+        r = s.prompts[1].requests[0]  # re-cached 61k after the break
+        self.assertAlmostEqual(brk, r.costs()["write"], places=6)
+        self.assertAlmostEqual(save, brk * (1 - rep.HANDOFF_CTX / 61000), places=6)
+        self.assertEqual(long_read, 0)  # never past LONG_CTX
+        carry = rep.tool_carry(s)
+        # the 10k-token Read in prompt 1 is cached once and re-read by the 3 later main calls
+        self.assertAlmostEqual(carry[0][1], 10000 * 1.25 * 4e-6, places=6)
+        self.assertAlmostEqual(carry[0][0], 10000 * 0.2e-6 * 3, places=6)
+        self.assertEqual(carry[1], [0.0, 0.0])
+
     def test_costs(self):
         r = rep.Request(t=0, session="s", model="claude-opus-5-5", sidechain=False,
                         inp=1_000_000, cw5=1_000_000, cw1h=1_000_000, cr=1_000_000, out=1_000_000)
@@ -262,6 +277,9 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual(len(data["req"][0]), 8)
         self.assertIsNotNone(data["fit"]["five_hour"])
         self.assertTrue(any(w[2] for w in data["windows"]["five_hour"]))
+        self.assertEqual(len(data["sessions"][0]["prompts"][0]["pat"]), 3)
+        self.assertEqual(len(data["sessions"][0]["prompts"][0]["tool"]), 2)
+        self.assertIsNone(data["power"])  # no sampler running here
 
     def test_reading_cached_by_the_top_bar_is_used(self):
         # An older top bar cached a fresh reading without logging it.
