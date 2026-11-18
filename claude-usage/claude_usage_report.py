@@ -806,6 +806,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--no-open", action="store_true", help="don't open the page in the browser")
     p.add_argument("--no-fetch", action="store_true", help="don't ask Claude for a fresh usage reading")
     p.add_argument("--json", action="store_true", help="print the report data as JSON instead")
+    p.add_argument("--tab", choices=("usage", "power"), help="open the page on this tab")
     args = p.parse_args(argv)
 
     now = time.time()
@@ -828,7 +829,7 @@ def main(argv: list[str] | None = None) -> int:
     write_html(data, out)
     print_summary(data, out, warn)
     if not args.no_open:
-        webbrowser.open(out.resolve().as_uri())
+        webbrowser.open(out.resolve().as_uri() + (f"#{args.tab}" if args.tab else ""))
     return 0
 
 
@@ -1774,14 +1775,17 @@ const PW_RANGES = [["1", "24 hours"], ["7", "7 days"], ["all", "All"]];
 const CLAUDE_COLORS = ["var(--s2)", "var(--s5)", "var(--s8)"];
 const OTHER_COLORS = ["var(--s1)", "var(--s3)", "var(--s7)", "var(--s6)", "var(--s4)"];
 const fmtW = w => (w >= 10 ? w.toFixed(0) : w.toFixed(1)) + " W";
+// how fast a draw empties the battery: % of a full charge per minute
+const fmtRate = w => PW && PW.battery_wh ? (w / PW.battery_wh * 100 / 60).toFixed(2) + "%/min" : "";
 const fmtWh = wh => wh >= 1000 ? (wh / 1000).toFixed(1) + " kWh" : wh >= 10 ? wh.toFixed(0) + " Wh" : wh.toFixed(1) + " Wh";
 function renderPower() {
   const box = document.getElementById("tab-power");
   if (!PW) {
     box.replaceChildren(h("section", {class: "card"},
       h("h2", {}, "Power use per app"),
-      h("p", {}, "No power samples yet. A small background sampler records, once a minute, how much CPU time each app used and, " +
-        "while the laptop runs on battery, how many watts it draws. It costs about 15 ms of CPU per minute."),
+      h("p", {}, "No power samples yet. A small background sampler records, once a minute, how much CPU and GPU time each app used, " +
+        "the screen brightness and Wi-Fi traffic, and while the laptop runs on battery, how many watts it draws. " +
+        "It costs about 15 ms of CPU per minute."),
       h("p", {}, "Start it with:"), h("pre", {class: "cmd"}, "claude-usage power install"),
       h("p", {class: "muted small"}, "Remove it again with claude-usage power uninstall. The samples stay on this computer.")));
     return;
@@ -1797,24 +1801,39 @@ function renderPower() {
     secs += s; if (meas !== null) measSecs += s; acSecs += ac * s;
   }
   const total = wh.reduce((a, b) => a + b, 0), hours = secs / 3600;
-  const iBase = G.indexOf(PW.baseline);
+  const isBase = g => PW.base.includes(g);
   const claudeWh = G.reduce((a, g, i) => a + (isClaude(g) ? wh[i] : 0), 0);
-  const active = total - (iBase >= 0 ? wh[iBase] : 0);
-  const m = PW.model;
+  const baseWh = G.reduce((a, g, i) => a + (isBase(g) ? wh[i] : 0), 0);
+  const active = total - baseWh;
+  const m = PW.model, c = m.coef;
   const tile = (label, value, ...notes) => h("div", {class: "tile"}, h("div", {class: "label"}, label), h("div", {class: "value"}, value), ...notes.map(n => h("div", {class: "note"}, n)));
   const seg = h("div", {class: "seg", role: "group", "aria-label": "Time range"},
     PW_RANGES.map(([k, l]) => h("button", {"aria-pressed": String(k === pwRange), onclick: () => { pwRange = k; store.set("cu-pw", k); renderPower(); }}, l)));
   const chart = h("div", {class: "chart"});
   box.replaceChildren(
     h("div", {class: "tiles"},
-      tile("Average draw", hours ? fmtW(total / hours) : "—", `over ${fmtDur(secs)} sampled`,
+      tile("Average draw", hours ? fmtW(total / hours) : "—",
+        hours && PW.battery_wh ? `${fmtRate(total / hours)} of your ${PW.battery_wh.toFixed(0)} Wh battery` : "",
+        `over ${fmtDur(secs)} sampled`,
         measSecs ? `${Math.round(100 * measSecs / secs)}% of it measured on battery` : "all on AC power: estimated"),
-      tile("Energy", fmtWh(total), `${fmtWh(active)} of it from apps working, the rest baseline`),
+      tile("Energy", fmtWh(total), `${fmtWh(active)} of it from apps working (CPU and GPU), ` +
+        `${fmtWh(baseWh)} screen, Wi-Fi and idle`),
+      (() => {
+        const B = PW.battery, sc = k => B && B.scenarios.find(s => s.key === k);
+        const cur = sc("now") || sc("typical"), idle = sc("idle");
+        return B ? tile("Battery life", cur ? fmtDur(cur.h * 3600) : "—",
+          `at ${cur && cur.key === "now" ? "current use" : "your typical use"}, from ${Math.round(B.pct)}%` +
+            (B.status && B.status !== "Discharging" ? " if unplugged now" : ""),
+          idle ? `idle: ${fmtDur(idle.h * 3600)}` + (sc("typical") && cur.key === "now" ? ` · typical: ${fmtDur(sc("typical").h * 3600)}` : "") : "")
+          : null;
+      })(),
       tile("Claude", total ? `${Math.round(100 * claudeWh / total)}%` : "—", `${fmtWh(claudeWh)} of all power`,
         active ? `${Math.round(100 * claudeWh / active)}% of what apps added on top of the baseline` : ""),
       tile("Power model", m.fitted ? `±${m.err.toFixed(1)} W` : "typical",
-        m.fitted ? `fitted on ${m.n} battery samples` : `needs ${Math.max(0, 30 - m.n)} more samples on battery to fit your laptop`,
-        `baseline ${m.base.toFixed(1)} W + up to ${m.per_cpu.toFixed(0)} W with all ${PW.ncpu} CPUs busy`)),
+        m.fitted ? `fitted on ${m.n} battery samples` : `needs ${Math.max(0, 30 - m.n)} more minutes on battery to fit your laptop`,
+        `idle ${c.idle.toFixed(1)} W · screen up to ${c.screen.toFixed(1)} W · ` +
+        `CPU up to ${c.cpu.toFixed(0)} W · GPU up to ${c.gpu.toFixed(1)} W`)),
+    h("section", {class: "card", id: "pw-outlook"}),
     h("section", {class: "card"},
       h("div", {class: "head"}, h("h2", {}, "Power over time"), seg),
       chart,
@@ -1823,23 +1842,28 @@ function renderPower() {
         "only available while unplugged. Gaps are times the laptop was off, asleep or the sampler wasn't running.")),
     h("section", {class: "card"}, h("h2", {}, "Apps"), h("div", {id: "pw-table", style: "margin-top:10px"}),
       h("details", {style: "margin-top:12px"}, h("summary", {}, "How this is measured"),
-        h("p", {}, "Linux doesn't measure power per process. Once a minute the sampler reads how much CPU time every process used " +
-          "and groups processes into apps. Claude counts as three groups: Claude Code sessions, the desktop app, and everything " +
+        h("p", {}, "Linux doesn't measure power per part or per process. Once a minute the sampler reads how much CPU time " +
+          "every process used, how much GPU time every graphics client used, how busy the GPU was, the screen's brightness " +
+          "and the Wi-Fi traffic. Claude counts as three groups: Claude Code sessions, the desktop app, and everything " +
           "Claude starts (shells, scripts, MCP servers), found by following each process's parents."),
-        h("p", {}, "Watts are split as baseline + a share of the rest by CPU time. The baseline is what the laptop draws doing " +
-          "nothing (screen, memory, Wi-Fi). On battery the total is measured, so the shares add up to the real draw; on AC " +
-          "the total is estimated from CPU load with the model fitted on the battery samples."),
-        h("p", {}, "Not covered: GPU work (video playback, graphics) appears only through the CPU time around it, and screen " +
-          "brightness moves the baseline. Short commands that start and end within a minute are caught through their parent " +
-          "process; whatever can't be placed is listed as \"Short-lived processes\"."))));
+        h("p", {}, "The watts come from a model: idle + screen × brightness + CPU × busy CPUs + GPU × busy GPU + Wi-Fi × traffic. " +
+          "It's fitted on the samples taken on battery, where the total is measured, and held near typical laptop values " +
+          "for anything the data can't show yet (if you never change the brightness, it can't learn what the screen costs). " +
+          "On battery the parts are scaled to add up to the measured draw. The CPU part goes to apps by CPU time, the GPU " +
+          "part by GPU time; \"Graphics: other\" is GPU work no process of yours accounts for."),
+        h("p", {}, "\"Idle\" is what's left: memory, chipset, SSD, an idle CPU, USB devices. Short commands that start and end " +
+          "within a minute are caught through their parent process; whatever can't be placed is listed as \"Short-lived processes\"."))),
+    h("section", {class: "card", id: "pw-watch"}));
 
   // chart layers: baseline, Claude groups, the biggest other apps, the rest as Other
-  const order = G.map((g, i) => i).filter(i => i !== iBase).sort((a, b) => wh[b] - wh[a]);
+  const order = G.map((g, i) => i).filter(i => !isBase(G[i])).sort((a, b) => wh[b] - wh[a]);
   const claudeIdx = order.filter(i => isClaude(G[i]));
   const otherIdx = order.filter(i => !isClaude(G[i]) && G[i] !== "Other").slice(0, OTHER_COLORS.length);
-  const shown = new Set([iBase, ...claudeIdx, ...otherIdx]);
+  const BASE_STYLE = {[PW.base[0]]: ["Idle", "var(--other)", 0.55], [PW.base[1]]: ["Screen", "var(--ink2)", 0.45], [PW.base[2]]: ["Wi-Fi", "var(--axis)", 0.9]};
+  const baseIdx = G.map((g, i) => i).filter(i => isBase(G[i]) && wh[i] > 0);
+  const shown = new Set([...baseIdx, ...claudeIdx, ...otherIdx]);
   const layers = [], idxs = [];
-  if (iBase >= 0) { layers.push({name: "Baseline (idle)", color: "var(--other)", opacity: 0.55}); idxs.push([iBase]); }
+  for (const i of baseIdx) { const [n, col, op] = BASE_STYLE[G[i]]; layers.push({name: n, color: col, opacity: op}); idxs.push([i]); }
   otherIdx.forEach((i, k) => { layers.push({name: G[i], color: OTHER_COLORS[k]}); idxs.push([i]); });
   const rest = G.map((g, i) => i).filter(i => !shown.has(i));
   if (rest.length) { layers.push({name: "Other apps", color: "var(--muted)", opacity: 0.6}); idxs.push(rest); }
@@ -1850,8 +1874,9 @@ function renderPower() {
   for (const b of bins) {
     const k = Math.floor(b[0] / step) * step;
     let s = slots.get(k);
-    if (!s) slots.set(k, s = {secs: 0, wh: new Array(G.length).fill(0), meas: [0, 0]});
+    if (!s) slots.set(k, s = {secs: 0, wh: new Array(G.length).fill(0), meas: [0, 0], br: [0, 0]});
     s.secs += b[1]; b[4].forEach((v, i) => { s.wh[i] += v; });
+    if (b[5] !== null && b[5] !== undefined) { s.br[0] += b[5] * b[1]; s.br[1] += b[1]; }
     if (b[2] !== null) { s.meas[0] += b[2] * b[1]; s.meas[1] += b[1]; }
   }
   const grid = [], values = layers.map(() => []), measured = [];
@@ -1872,7 +1897,8 @@ function renderPower() {
       const rows = layers.map((l, L) => [l.color, l.name, fmtW(values[L][k])]).filter(r => parseFloat(r[2]) > 0).reverse();
       const tot = values.reduce((a, v) => a + v[k], 0);
       return [`${fmtDT(grid[k] - step / 2)} – ${fmtTime(grid[k] + step / 2)}`, rows,
-        s && s.secs ? `total ${fmtW(tot)}` + (s.meas[1] ? ` · measured ${fmtW(s.meas[0] / s.meas[1])}` : " · on AC, estimated") : "not sampled"];
+        s && s.secs ? `total ${fmtW(tot)}` + (s.meas[1] ? ` · measured ${fmtW(s.meas[0] / s.meas[1])}` : " · on AC, estimated") +
+          (s.br[1] ? ` · screen at ${Math.round(100 * s.br[0] / s.br[1])}%` : "") : "not sampled"];
     },
   });
   draw();
@@ -1886,29 +1912,120 @@ function renderPower() {
   const tr = (name, x, color, cls, tag) => h("tr", {class: cls || null, style: "cursor:default"},
     h("td", {}, h("span", {class: "title"}, name), tag ? h("span", {class: "tag"}, tag) : null),
     h("td", {class: "num"}, fmtWh(x)), h("td", {class: "num hide-sm"}, hours ? fmtW(x / hours) : "—"),
+    h("td", {class: "num hide-sm muted"}, hours ? fmtRate(x / hours) : ""),
     h("td", {class: "hide-sm", style: "width:30%"}, bar(x, color)),
     h("td", {class: "num"}, total ? (100 * x / total).toFixed(x / total < 0.1 ? 1 : 0) + "%" : "—"));
   document.getElementById("pw-table").replaceChildren(rows.length ? h("table", {},
-    h("thead", {}, h("tr", {}, h("th", {}, "App"), h("th", {class: "num"}, "Energy"), h("th", {class: "num hide-sm"}, "Average"),
+    h("thead", {}, h("tr", {}, h("th", {}, "App"), h("th", {class: "num"}, "Energy"), h("th", {class: "num hide-sm"}, "Average"), h("th", {class: "num hide-sm"}, "Battery"),
       h("th", {class: "hide-sm"}, ""), h("th", {class: "num"}, "Share"))),
     h("tbody", {},
       claudeWh ? tr("All of Claude", claudeWh, "var(--s2)", "claude", "3 groups below") : null,
-      rows.map(r => tr(r.g === PW.baseline ? "Baseline (screen, memory, Wi-Fi, idle CPU)" : r.g, r.wh, colorOf(r.g),
-        isClaude(r.g) ? "claude" : null, isClaude(r.g) ? "Claude" : null)))) : h("div", {class: "empty"}, "No samples in this range."));
+      rows.map(r => tr(r.g, r.wh, colorOf(r.g),
+        isClaude(r.g) ? "claude" : null, isClaude(r.g) ? "Claude" : isBase(r.g) ? "not an app" : null)))) : h("div", {class: "empty"}, "No samples in this range."));
+  renderWatch(since);
+  renderOutlook(document.getElementById("pw-outlook"));
+}
+
+// battery life: the charge so far and how long what's left lasts under each kind of use
+const SCEN_COLORS = {now: "var(--s2)", typical: "var(--s1)", idle: "var(--s3)", idle_dim: "var(--s7)"};
+function renderOutlook(card) {
+  const B = PW.battery;
+  if (!B || !B.scenarios.length) { card.hidden = true; return; }
+  const now = D.generated;
+  const plugged = B.status && B.status !== "Discharging";
+  const hist = PW.bins.filter(b => b[6] !== null && b[6] !== undefined && b[0] >= now - 12 * 3600).map(b => [b[0] + PW.bin, b[6]]);
+  const maxH = Math.min(36, Math.max(...B.scenarios.map(s => s.h)));
+  const x0 = now - 12 * 3600, x1 = now + Math.max(2, maxH * 1.04) * 3600;
+  const chart = h("div", {class: "chart"});
+  const legend = h("div", {class: "legend"},
+    hist.length ? h("span", {}, h("i", {class: "sw line", style: "background:var(--ink)"}), "charge so far") : null,
+    B.scenarios.map(s => h("span", {}, h("i", {class: "sw line", style: `background:${SCEN_COLORS[s.key]}`}),
+      `${s.label}: ${fmtDur(s.h * 3600)} (${fmtW(s.w)})`)));
+  card.replaceChildren(
+    h("div", {class: "head"}, h("h2", {}, "Battery life"),
+      h("span", {class: "muted small"}, `${Math.round(B.pct)}% of ${B.full_wh.toFixed(0)} Wh` + (plugged ? ` · plugged in (${(B.status || "").toLowerCase()}): times are if you unplugged now` : ""))),
+    chart, legend,
+    h("div", {class: "caption"}, "How long the charge lasts at each kind of use, as straight lines from now to empty. " +
+      B.scenarios.map(s => `${s.label}: ${s.note}.`).join(" ") +
+      " Idle and screen figures come from the power model, so they firm up as it learns your laptop on battery."));
+  const draw = () => {
+    chart.replaceChildren();
+    const W = Math.max(280, chart.clientWidth), H = 240, m = {l: 44, r: 14, t: 14, b: 26};
+    const svg = sv("svg", {width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": "Battery charge and projections"});
+    chart.append(svg);
+    const X = t => m.l + (t - x0) / (x1 - x0) * (W - m.l - m.r), Y = v => H - m.b - v / 100 * (H - m.t - m.b);
+    for (let v = 0; v <= 100; v += 25) {
+      sv("line", {x1: m.l, x2: W - m.r, y1: Y(v), y2: Y(v), style: `stroke:var(${v ? "--grid" : "--axis"})`}, svg);
+      sv("text", {x: m.l - 8, y: Y(v) + 4, "text-anchor": "end", style: "fill:var(--muted);font-size:11px"}, svg).textContent = v + "%";
+    }
+    for (const [t, label] of timeTicks(x0, x1, W - m.l - m.r)) {
+      sv("line", {x1: X(t), x2: X(t), y1: H - m.b, y2: H - m.b + 4, style: "stroke:var(--axis)"}, svg);
+      sv("text", {x: X(t), y: H - 6, "text-anchor": "middle", style: "fill:var(--muted);font-size:11px"}, svg).textContent = label;
+    }
+    sv("line", {x1: X(now), x2: X(now), y1: m.t, y2: H - m.b, style: "stroke:var(--muted)"}, svg);
+    sv("text", {x: X(now) + 4, y: m.t + 2, style: "fill:var(--muted);font-size:11px"}, svg).textContent = "now";
+    if (hist.length > 1)
+      sv("polyline", {points: hist.map(([t, v]) => `${X(t)},${Y(v)}`).join(" "),
+        style: "fill:none;stroke:var(--ink);stroke-width:2;stroke-linejoin:round"}, svg);
+    for (const s of B.scenarios) {
+      const tEnd = now + s.h * 3600, tCut = Math.min(tEnd, x1);
+      const vCut = B.pct * (1 - (tCut - now) / (tEnd - now));
+      sv("line", {x1: X(now), y1: Y(B.pct), x2: X(tCut), y2: Y(vCut),
+        style: `stroke:${SCEN_COLORS[s.key]};stroke-width:2;stroke-linecap:round;${s.key === "now" ? "" : "stroke-dasharray:6 4"}`}, svg)
+        .append(Object.assign(document.createElementNS(NS, "title"), {textContent: `${s.label}: empty in ${fmtDur(s.h * 3600)}, at ${fmtDT(tEnd)}`}));
+      if (tEnd <= x1) sv("circle", {cx: X(tEnd), cy: Y(0), r: 3.5, style: `fill:${SCEN_COLORS[s.key]};stroke:var(--surface);stroke-width:2`}, svg);
+    }
+    sv("circle", {cx: X(now), cy: Y(B.pct), r: 4, style: "fill:var(--ink);stroke:var(--surface);stroke-width:2"}, svg);
+  };
+  draw();
+  resizers.outlook = draw;
+}
+
+// the battery watch: settings and what it did
+function renderWatch(since) {
+  const cfg = PW.config, ev = PW.events.filter(e => e.t >= since).reverse();
+  const pct = x => Math.round(100 * x) + "%";
+  const rate = w => { const r = fmtRate(w); return r ? ` · ${r}` : ""; };
+  const text = e => e.ev === "alert" ? `High draw: ${e.w.toFixed(0)} W${rate(e.w)} on battery (alert above ${e.limit.toFixed(0)} W). ` +
+      `Biggest: ${(e.top || []).map(([g, w]) => `${g} ${w.toFixed(1)} W${rate(w)}`).join(", ")}`
+    : e.ev === "dim" ? `Dimmed the screen ${pct(e.frm)} → ${pct(e.to)} at ${e.w.toFixed(0)} W`
+    : e.ev === "restore" ? `Plugged in: brightness back to ${pct(e.br)}`
+    : e.ev === "manual" ? `You changed the brightness (${pct(e.br)}): no more dimming until next unplugged` : e.ev;
+  document.getElementById("pw-watch").replaceChildren(
+    h("h2", {}, "Battery watch"),
+    h("p", {class: "caption"}, `On battery, if the laptop draws much more than usual for 3 minutes, ` +
+      (cfg.alert ? "you get a notification naming the biggest users" : "nothing is shown (alerts are off)") +
+      (cfg.dim ? ` and the screen brightness is halved, at most every 10 minutes and never below ${pct(cfg.dim_floor)}. ` +
+        "Change the brightness yourself and it stops until you next unplug; plugging in restores it." : ". Dimming is off.") +
+      ` Threshold: ${cfg.alert_watts ? cfg.alert_watts + " W" : "1.6× your usual draw on battery once it's known, 15 W until then"}.`),
+    h("p", {class: "caption"}, h("b", {}, "To change it: "), "in the top bar, open Claude usage → Power and flip the switches, " +
+      "or in a terminal:"),
+    h("pre", {class: "cmd"}, "claude-usage power config --alert on|off --dim on|off --watts N --floor PERCENT"),
+    h("p", {class: "caption"}, `Now: alerts ${cfg.alert ? "on" : "off"}, dimming ${cfg.dim ? "on" : "off"}` +
+      ` (as of when this page was built).`),
+    ev.length ? h("table", {style: "margin-top:8px"}, h("tbody", {}, ev.slice(0, 50).map(e =>
+      h("tr", {style: "cursor:default"}, h("td", {class: "num muted", style: "width:1%"}, fmtDT(e.t)), h("td", {}, text(e))))))
+      : h("div", {class: "muted small", style: "margin-top:8px"}, "Nothing flagged in this range."));
 }
 
 // ---------------------------------------------------------------- tabs
-let tab = store.get("cu-tab") === "power" ? "power" : "usage";
+let tab = location.hash === "#power" ? "power" : location.hash === "#usage" ? "usage" :
+  store.get("cu-tab") === "power" ? "power" : "usage";
 let powerDrawn = false;
 function showTab(t) {
   tab = t; store.set("cu-tab", t);
+  try { history.replaceState(null, "", "#" + t); } catch { /* file: URLs in some browsers */ }
   for (const k of ["usage", "power"]) {
     document.getElementById("tab-" + k).hidden = k !== t;
     document.getElementById("tabbtn-" + k).setAttribute("aria-selected", String(k === t));
   }
   document.getElementById("unit-controls").style.visibility = t === "usage" ? "" : "hidden";
   if (t === "power" && !powerDrawn) { powerDrawn = true; renderPower(); }
-  if (t === "usage") Object.entries(resizers).forEach(([k, f]) => { if (k !== "power") f(); });
+  // charts in a hidden tab were drawn at the minimum width: redraw the shown tab's once laid out
+  const powerCharts = ["power", "outlook"];
+  requestAnimationFrame(() => Object.entries(resizers).forEach(([k, f]) => {
+    if (powerCharts.includes(k) === (t === "power")) f();
+  }));
 }
 document.getElementById("tabbtn-usage").addEventListener("click", () => showTab("usage"));
 document.getElementById("tabbtn-power").addEventListener("click", () => showTab("power"));

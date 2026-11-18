@@ -15,7 +15,7 @@ Modes:
     claude-usage --json     raw JSON from the API
     claude-usage --login    log in again via Claude Code (opens your browser)
     claude-usage report     what used your limits, per chat and per prompt (HTML)
-    claude-usage power      what uses your laptop's power, per app (feeds the report's Power tab)
+    claude-usage power      power per app, screen and Wi-Fi; battery watch (feeds the report's Power tab)
 
 An expired login is renewed the way Claude Code renews it and written back to
 Claude Code's credentials file, so a browser login is rarely needed. Turn that

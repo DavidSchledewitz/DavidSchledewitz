@@ -85,6 +85,39 @@ function findClaude() {
     return null;
 }
 
+// The power sampler's settings (`claude-usage power config`), which it re-reads
+// every minute. The switches in the Power submenu write the same file.
+function powerConfigPath() {
+    return GLib.build_filenamev([GLib.get_user_config_dir(), 'claude-usage', 'power.json']);
+}
+
+function readPowerConfig() {
+    const defaults = {alert: true, dim: true};
+    try {
+        const [, bytes] = GLib.file_get_contents(powerConfigPath());
+        return {...defaults, ...JSON.parse(new TextDecoder().decode(bytes))};
+    } catch {
+        return defaults;
+    }
+}
+
+function writePowerConfig(cfg) {
+    const path = powerConfigPath();
+    GLib.mkdir_with_parents(GLib.path_get_dirname(path), 0o755);
+    GLib.file_set_contents(path, `${JSON.stringify(cfg, null, 2)}\n`);
+}
+
+/** Whether the sampler wrote a sample in the last few minutes. */
+function powerSamplerRunning() {
+    const log = Gio.File.new_for_path(GLib.build_filenamev([GLib.get_user_data_dir(), 'claude-usage', 'power.jsonl']));
+    try {
+        const info = log.query_info('time::modified', Gio.FileQueryInfoFlags.NONE, null);
+        return Date.now() / 1000 - info.get_modification_date_time().to_unix() < 5 * 60;
+    } catch {
+        return false;
+    }
+}
+
 /**
  * Command for `claude-usage report`: the copy installed with this extension
  * (same version as the extension), else the claude-usage command.
@@ -551,6 +584,17 @@ class ClaudeUsageIndicator extends PanelMenu.Button {
         this._reportItem = new PopupMenu.PopupMenuItem(REPORT_LABEL);
         this._reportItem.connect('activate', () => this._openReport());
         this.menu.addMenuItem(this._reportItem);
+        this._powerMenu = new PopupMenu.PopupSubMenuMenuItem('Power');
+        this._powerReport = new PopupMenu.PopupMenuItem('Power report');
+        this._powerReport.connect('activate', () => this._openReport('power'));
+        this._alertSwitch = new PopupMenu.PopupSwitchMenuItem('Alert on high draw on battery', true);
+        this._alertSwitch.connect('toggled', (_item, on) => this._setPower('alert', on));
+        this._dimSwitch = new PopupMenu.PopupSwitchMenuItem('Dim the screen when it\'s high', true);
+        this._dimSwitch.connect('toggled', (_item, on) => this._setPower('dim', on));
+        this._powerOff = new PopupMenu.PopupMenuItem('Sampler not running: claude-usage power install', {reactive: false});
+        for (const item of [this._powerReport, this._alertSwitch, this._dimSwitch, this._powerOff])
+            this._powerMenu.menu.addMenuItem(item);
+        this.menu.addMenuItem(this._powerMenu);
         const refresh = new PopupMenu.PopupMenuItem('Refresh now');
         refresh.connect('activate', () => this._source.refresh());
         this.menu.addMenuItem(refresh);
@@ -558,7 +602,11 @@ class ClaudeUsageIndicator extends PanelMenu.Button {
         this._clockFormat = new Gio.Settings({schema_id: 'org.gnome.desktop.interface'});
         this._rows = [];
         this._ticker = 0;
-        this.menu.connect('open-state-changed', (_menu, open) => this._setTicking(open));
+        this.menu.connect('open-state-changed', (_menu, open) => {
+            this._setTicking(open);
+            if (open)
+                this._syncPower();
+        });
 
         this._source = new UsageSource(() => this._update());
         this._buildContent();
@@ -579,11 +627,28 @@ class ClaudeUsageIndicator extends PanelMenu.Button {
             this._source.login();
     }
 
+    _syncPower() {
+        const cfg = readPowerConfig();
+        this._alertSwitch.setToggleState(Boolean(cfg.alert));
+        this._dimSwitch.setToggleState(Boolean(cfg.dim));
+        this._powerOff.visible = !powerSamplerRunning();
+    }
+
+    _setPower(key, on) {
+        try {
+            writePowerConfig({...readPowerConfig(), [key]: on});
+        } catch (e) {
+            this._notify('Couldn\'t save the power setting', e.message);
+            this._syncPower();
+        }
+    }
+
     /** Build the usage report in the background; it opens in the browser. */
-    _openReport() {
+    _openReport(tab = null) {
         if (this._reportProc)
             return;
-        const cmd = reportCommand(this._extPath);
+        const base = reportCommand(this._extPath);
+        const cmd = base && tab ? [...base, '--tab', tab] : base;
         if (!cmd) {
             this._notify('Couldn\'t build the usage report', 'It needs Python 3. Install it with: sudo apt install python3');
             return;
