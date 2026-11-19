@@ -1775,8 +1775,12 @@ const PW_RANGES = [["1", "24 hours"], ["7", "7 days"], ["all", "All"]];
 const CLAUDE_COLORS = ["var(--s2)", "var(--s5)", "var(--s8)"];
 const OTHER_COLORS = ["var(--s1)", "var(--s3)", "var(--s7)", "var(--s6)", "var(--s4)"];
 const fmtW = w => (w >= 10 ? w.toFixed(0) : w.toFixed(1)) + " W";
-// how fast a draw empties the battery: % of a full charge per minute
-const fmtRate = w => PW && PW.battery_wh ? (w / PW.battery_wh * 100 / 60).toFixed(2) + "%/min" : "";
+// how fast a draw empties the battery: % of a full charge per hour
+const fmtRate = w => {
+  if (!PW || !PW.battery_wh) return "";
+  const r = w / PW.battery_wh * 100;
+  return (r >= 10 ? r.toFixed(0) : r.toFixed(1)) + "%/h";
+};
 const fmtWh = wh => wh >= 1000 ? (wh / 1000).toFixed(1) + " kWh" : wh >= 10 ? wh.toFixed(0) + " Wh" : wh.toFixed(1) + " Wh";
 function renderPower() {
   const box = document.getElementById("tab-power");

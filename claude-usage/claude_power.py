@@ -300,14 +300,18 @@ def battery_wh() -> tuple[float, float] | None:
     return (full, now) if full > 0 else None
 
 
-def pct_per_min(watts: float, full_wh: float | None) -> float | None:
-    """How fast a draw empties the battery, in % of a full charge per minute."""
-    return None if not full_wh else watts / full_wh * 100 / 60
+def pct_per_hour(watts: float, full_wh: float | None) -> float | None:
+    """How fast a draw empties the battery, in % of a full charge per hour."""
+    return None if not full_wh else watts / full_wh * 100
+
+
+def fmt_pct_h(r: float) -> str:
+    return f"{r:.0f}%/h" if r >= 10 else f"{r:.1f}%/h"
 
 
 def fmt_rate(watts: float, full_wh: float | None) -> str:
-    r = pct_per_min(watts, full_wh)
-    return f"{watts:.1f} W" if r is None else f"{watts:.1f} W · {r:.2f}%/min"
+    r = pct_per_hour(watts, full_wh)
+    return f"{watts:.1f} W" if r is None else f"{watts:.1f} W · {fmt_pct_h(r)}"
 
 
 def app_name(comm: str, exe: str) -> str:
@@ -715,7 +719,7 @@ class Watchdog:
         full = bat[0] if bat else None
         top = ", ".join(f"{g} {fmt_rate(w, full)}" for w, g in parts)
         usual = f" (usually ~{self.typical:.0f} W)" if self.typical else ""
-        rate = pct_per_min(rec["w"], full)
+        rate = pct_per_hour(rec["w"], full)
         mins = bat[1] / rec["w"] * 60 if bat and rec["w"] > 0 else None
         left = "" if mins is None else f", ~{int(mins // 60)}h {int(mins % 60):02d}m left at this rate" if mins >= 60 \
             else f", ~{int(mins)} min left at this rate"
@@ -731,11 +735,11 @@ class Watchdog:
                 dimmed = f" Dimmed the screen {round(100 * bl[1] / bl[2])}% → {round(100 * new / bl[2])}%."
                 log_event("dim", now, w=rec["w"], frm=round(bl[1] / bl[2], 3), to=round(new / bl[2], 3))
         if cfg.get("alert") and (now - self.last_alert >= self.ALERT_EVERY or dimmed):
-            head = f"{rec['w']:.0f} W" + (f" · {rate:.2f}%/min" if rate is not None else "")
+            head = f"{rec['w']:.0f} W" + (f" · {fmt_pct_h(rate)}" if rate is not None else "")
             self.notify(f"High power draw on battery: {head}{usual}", f"Biggest: {top}{left}.{dimmed}")
             if now - self.last_alert >= self.ALERT_EVERY:
                 log_event("alert", now, w=rec["w"], limit=round(limit, 1), top=[[g, round(w, 2)] for w, g in parts],
-                          rate=None if rate is None else round(rate, 3))
+                          pct_h=None if rate is None else round(rate, 2))
             self.last_alert = now
 
 
