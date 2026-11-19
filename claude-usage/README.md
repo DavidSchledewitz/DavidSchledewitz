@@ -235,9 +235,15 @@ calibration error). The calibration also gives each window its own offset for
 it, so it doesn't inflate the per-token rate. Claude Code on the web runs on
 separate cloud credits, not on these limits.
 
-## What uses my laptop's power?
+## Optional: what uses my laptop's power?
 
-The report has a second tab, **Power**: watts per app over time, energy per
+Everything above is about Claude usage and needs nothing else. This part is
+extra and stays out of sight until you turn it on: no background process, no
+Power tab in the report and no Power menu in the top bar until you run
+`claude-usage power install` (and gone again after `claude-usage power
+uninstall`).
+
+Once on, the report has a second tab, **Power**: watts per app over time, energy per
 app, how much of it is Claude (Claude Code sessions, the desktop app, and
 everything Claude runs: shells, scripts, MCP servers), and what the screen,
 Wi-Fi and the idle laptop take. It needs a small background sampler:
