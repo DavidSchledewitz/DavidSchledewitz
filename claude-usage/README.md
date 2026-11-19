@@ -290,9 +290,9 @@ alone until you next unplug; plugging in restores the brightness from before.
 The Power tab lists everything it did.
 
 Alerts show the draw both in watts and as how fast it empties the battery
-(% of a full charge per minute), with the time left at that rate, e.g.
-*"High power draw on battery: 19 W · 0.60%/min. Biggest: Chrome 6.1 W ·
-0.19%/min, …, ~2h 45m left"*. The Power tab shows the same rate per app.
+(% of a full charge per hour), with the time left at that rate, e.g.
+*"High power draw on battery: 19 W · 36%/h. Biggest: Chrome 6.1 W ·
+12%/h, …, ~2h 45m left"*. The Power tab shows the same rate per app.
 
 **Settings** are in the top bar: **Claude usage → Power** has switches for the
 alert and the dimming, and **Power report** opens the report on the Power
