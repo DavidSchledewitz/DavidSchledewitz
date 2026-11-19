@@ -107,6 +107,12 @@ function writePowerConfig(cfg) {
     GLib.file_set_contents(path, `${JSON.stringify(cfg, null, 2)}\n`);
 }
 
+/** Whether `claude-usage power install` set up the (optional) power sampler. */
+function powerSamplerInstalled() {
+    return GLib.file_test(GLib.build_filenamev([GLib.get_user_config_dir(), 'systemd', 'user', 'claude-usage-power.service']),
+        GLib.FileTest.EXISTS);
+}
+
 /** Whether the sampler wrote a sample in the last few minutes. */
 function powerSamplerRunning() {
     const log = Gio.File.new_for_path(GLib.build_filenamev([GLib.get_user_data_dir(), 'claude-usage', 'power.jsonl']));
@@ -595,6 +601,7 @@ class ClaudeUsageIndicator extends PanelMenu.Button {
         for (const item of [this._powerReport, this._alertSwitch, this._dimSwitch, this._powerOff])
             this._powerMenu.menu.addMenuItem(item);
         this.menu.addMenuItem(this._powerMenu);
+        this._powerMenu.visible = powerSamplerInstalled();
         const refresh = new PopupMenu.PopupMenuItem('Refresh now');
         refresh.connect('activate', () => this._source.refresh());
         this.menu.addMenuItem(refresh);
@@ -628,6 +635,9 @@ class ClaudeUsageIndicator extends PanelMenu.Button {
     }
 
     _syncPower() {
+        this._powerMenu.visible = powerSamplerInstalled();
+        if (!this._powerMenu.visible)
+            return;
         const cfg = readPowerConfig();
         this._alertSwitch.setToggleState(Boolean(cfg.alert));
         this._dimSwitch.setToggleState(Boolean(cfg.dim));

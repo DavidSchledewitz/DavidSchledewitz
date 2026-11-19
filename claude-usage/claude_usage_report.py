@@ -973,7 +973,7 @@ details p, details li { color: var(--ink2); }
     <div class="controls" id="unit-controls"><span class="muted small">Show as</span>
       <div class="seg" id="units" role="group" aria-label="Show amounts as"></div></div>
   </div>
-  <div class="tabs" role="tablist" aria-label="Report">
+  <div class="tabs" role="tablist" aria-label="Report" id="tabs">
     <button role="tab" id="tabbtn-usage" aria-selected="true" aria-controls="tab-usage">Claude usage</button>
     <button role="tab" id="tabbtn-power" aria-selected="false" aria-controls="tab-power">Power</button>
   </div>
@@ -1780,16 +1780,6 @@ const fmtRate = w => PW && PW.battery_wh ? (w / PW.battery_wh * 100 / 60).toFixe
 const fmtWh = wh => wh >= 1000 ? (wh / 1000).toFixed(1) + " kWh" : wh >= 10 ? wh.toFixed(0) + " Wh" : wh.toFixed(1) + " Wh";
 function renderPower() {
   const box = document.getElementById("tab-power");
-  if (!PW) {
-    box.replaceChildren(h("section", {class: "card"},
-      h("h2", {}, "Power use per app"),
-      h("p", {}, "No power samples yet. A small background sampler records, once a minute, how much CPU and GPU time each app used, " +
-        "the screen brightness and Wi-Fi traffic, and while the laptop runs on battery, how many watts it draws. " +
-        "It costs about 15 ms of CPU per minute."),
-      h("p", {}, "Start it with:"), h("pre", {class: "cmd"}, "claude-usage power install"),
-      h("p", {class: "muted small"}, "Remove it again with claude-usage power uninstall. The samples stay on this computer.")));
-    return;
-  }
   const now = D.generated;
   const since = pwRange === "all" ? -Infinity : now - Number(pwRange) * 86400;
   const bins = PW.bins.filter(b => b[0] + PW.bin > since);
@@ -2009,7 +1999,9 @@ function renderWatch(since) {
 }
 
 // ---------------------------------------------------------------- tabs
-let tab = location.hash === "#power" ? "power" : location.hash === "#usage" ? "usage" :
+// The Power tab is optional: it exists only once `claude-usage power install` has collected samples.
+if (!PW) document.getElementById("tabs").hidden = true;
+let tab = !PW ? "usage" : location.hash === "#power" ? "power" : location.hash === "#usage" ? "usage" :
   store.get("cu-tab") === "power" ? "power" : "usage";
 let powerDrawn = false;
 function showTab(t) {
