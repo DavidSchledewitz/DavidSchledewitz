@@ -248,6 +248,11 @@ def wifi_bytes() -> int | None:
     return total if found else None
 
 
+def lid_closed() -> bool:
+    """With the lid shut the panel is off, whatever the backlight setting says."""
+    return any((_read(p) or "").split()[-1:] == ["closed"] for p in glob.glob("/proc/acpi/button/lid/*/state"))
+
+
 def external_displays() -> int:
     n = 0
     for d in glob.glob("/sys/class/drm/card*-*"):
@@ -458,7 +463,7 @@ class Sampler:
             rec = {"t": round(now, 1), "dt": round(dt, 1), "cap": round(dt * NCPU, 1),
                    "busy": round(max(0.0, busy_s), 2), "w": None if watts is None else round(watts, 2),
                    "ac": on_ac, "g": _top(secs),
-                   "br": None if bl is None else round(bl[1] / bl[2], 3),
+                   "br": None if bl is None else 0.0 if lid_closed() else round(bl[1] / bl[2], 3),
                    "gpu": None if gpu is None else round(gpu, 3),
                    "net": None if mb is None else round(mb, 2),
                    "gg": _top(gsecs, 8), "dp": external_displays(),
