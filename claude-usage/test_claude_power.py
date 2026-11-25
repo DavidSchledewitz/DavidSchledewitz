@@ -80,6 +80,16 @@ class BuildTests(unittest.TestCase):
         self.assertIsNone(cp.build(0, 1, []))
 
 
+class LidTests(unittest.TestCase):
+    def test_lid_state(self):
+        with mock.patch.object(cp, "_read", return_value="state:      closed"), \
+                mock.patch.object(cp.glob, "glob", return_value=["/proc/acpi/button/lid/LID0/state"]):
+            self.assertTrue(cp.lid_closed())
+        with mock.patch.object(cp, "_read", return_value="state:      open"), \
+                mock.patch.object(cp.glob, "glob", return_value=["/proc/acpi/button/lid/LID0/state"]):
+            self.assertFalse(cp.lid_closed())
+
+
 class OutlookTests(unittest.TestCase):
     def test_scenarios(self):
         model = cp.fit_model([])
